@@ -107,7 +107,7 @@ piece, unquote).
 * **The gate.** `scripts/check.sh` runs what CI runs: build, the
   declaration checker (every theorem reaches only `propext`, `Quot.sound`,
   `Classical.choice`), `lake exe props`, `lake exe conformance`,
-  `lake exe quickstart`, the traceability check; `--pbt` adds the plausible
+  `lake exe docs-index`, the traceability check; `--pbt` adds the plausible
   suite.
 
 ### Tested, not proved
@@ -186,7 +186,9 @@ mis-split of a quoted value ending in `\\` (UP-005).
   `tests/test_multipart.py` and Starlette's `tests/test_formparsers.py`;
   each names its upstream test. `tests/Fixtures.lean` holds upstream's HTTP
   fixtures (`tests/test_data/http/`) as data.
-* `examples/Quickstart.lean`: the README quickstart.
+* `examples/`: the ported upstream examples (`MANIFEST.toml`, checked by
+  `stack-tools/check-examples.py`), with `support/` for `hashlib` and `wsgiref`;
+  `LeanMultipart/RepoImpl/IOParsers.lean`: the `IO` objects they use.
 * `tests/Bench.lean` with `scripts/bench.sh`: native time and peak-memory
   checks on 50 MB bodies, run in CI.
 * `tests/pbt/`: a separate Lake package, the one place an external

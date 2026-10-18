@@ -18,8 +18,10 @@ core only; lean-starlette depends on it.
 
 ## Quickstart
 
-Upstream's quickstart (`docs/index.md`), translated. The code below is
-`examples/Quickstart.lean`, built and run in CI (`lake exe quickstart`).
+Upstream's quickstart (`docs/index.md`), ported block by block in
+[`examples/docs/Index.lean`](examples/docs/Index.lean); the index of ported
+examples is [`examples/README.md`](examples/README.md). CI builds them and
+checks their output against python-multipart's.
 
 ### Simple example
 
@@ -28,84 +30,97 @@ import python_multipart
 
 def simple_app(environ, start_response):
     ret = []
+
+    # The following two callbacks just append the name to the return value.
     def on_field(field):
         ret.append(b"Parsed value parameter named: %s" % (field.field_name,))
+
     def on_file(file):
         ret.append(b"Parsed file parameter named: %s" % (file.field_name,))
+
+    # Create headers object.
     headers = {'Content-Type': environ['CONTENT_TYPE']}
+    if 'CONTENT_LENGTH' in environ:
+        headers['Content-Length'] = environ['CONTENT_LENGTH']
+
+    # Parse the form.
     python_multipart.parse_form(headers, environ['wsgi.input'], on_field, on_file)
     ...
 ```
 
 ```lean
 import LeanMultipart
-open LeanMultipart
+open LeanMultipart Wsgiref
 
-def simpleApp (contentType body : ByteArray) : Except FormError (List String) := do
-  let items ← parseForm [("Content-Type", contentType)] body
-  return items.map fun
-    | .field f => s!"Parsed value parameter named: {latin1Decode f.fieldName}"
-    | .file f => s!"Parsed file parameter named: {(f.fieldName.map latin1Decode).getD ""}"
+def simpleApp (environ : Environ) (startResponse : StartResponse) : IO (List ByteArray) := do
+  let ret ← IO.mkRef (#[] : Array ByteArray)
+
+  -- The following two callbacks just append the name to the return value.
+  let onField (field : Field) :=
+    ret.modify (·.push ("Parsed value parameter named: ".toUTF8 ++ field.fieldName))
+
+  let onFile (file : File) :=
+    ret.modify (·.push ("Parsed file parameter named: ".toUTF8 ++ file.fieldName.getD .empty))
+
+  -- Create headers object.
+  let mut headers : Headers := [("Content-Type", environ["CONTENT_TYPE"]!)]
+  if environ.contains "CONTENT_LENGTH" then
+    headers := headers ++ [("Content-Length", environ["CONTENT_LENGTH"]!)]
+
+  -- Parse the form.
+  parseFormStream headers environ.wsgiInput onField onFile
+  ...
 ```
 
-Or with callbacks, in any monad, as upstream's `on_field` / `on_file`:
-
-```lean
-def simpleAppWith (contentType body : ByteArray) : StateM (Array String) (Except FormError Unit) :=
-  parseFormWith [("Content-Type", contentType)] body
-    (onField := fun f => modify (·.push s!"Parsed value parameter named: {latin1Decode f.fieldName}"))
-    (onFile := fun f => modify (·.push s!"Parsed file parameter named: {(f.fieldName.map latin1Decode).getD ""}"))
-```
-
-### In-depth example: streaming the parts
+### In-depth example: hashing each part as it streams
 
 ```python
-from python_multipart.multipart import parse_options_header
-
 content_type, params = parse_options_header(environ['CONTENT_TYPE'])
 boundary = params.get(b'boundary')
 callbacks = {'on_part_begin': on_part_begin, 'on_part_data': on_part_data, 'on_part_end': on_part_end}
 parser = python_multipart.MultipartParser(boundary, callbacks)
-while chunk := environ['wsgi.input'].read(1024 * 1024):
-    parser.write(chunk)
+inp = environ['wsgi.input']
+size = int(environ['CONTENT_LENGTH'])
+while size > 0:
+    to_read = min(size, 1024 * 1024)
+    data = inp.read(to_read)
+    parser.write(data)
+    size -= len(data)
+    if len(data) != to_read:
+        break
 ```
 
 ```lean
-def partChecksums (contentType : ByteArray) (chunks : List ByteArray) : Except String (List Nat) := do
-  let (_, params) := parseOptionsHeader contentType
-  let some b := params.get "boundary" | throw "no boundary"
-  let some boundary := Boundary.ofBytes? b | throw "invalid boundary"
-  let mut parser := MultipartParser.new boundary
-  let mut sums : Array Nat := #[]
-  let mut current := 0
-  for chunk in chunks do
-    match parser.write chunk with
-    | .error e => throw s!"parse error at offset {e.offset}"
-    | .ok (p, events, _) =>
-      parser := p
-      for ev in events do
-        match ev with
-        | .partBegin => current := 0
-        | .partData d => current := d.foldl (fun acc x => acc + x.toNat) current
-        | .partEnd => sums := sums.push current
-        | _ => pure ()
-  return sums.toList
+  let (_contentType, params) := parseOptionsHeader environ["CONTENT_TYPE"]!
+  let boundary := params.get "boundary"
+  let callbacks : MultipartCallbacks IO := { onPartBegin, onPartData, onPartEnd }
+  let parser ← MultipartParser.create boundary callbacks
+  let inp := environ.wsgiInput
+  let mut size := int environ["CONTENT_LENGTH"]!
+  while size > 0 do
+    let toRead := min size (1024 * 1024)
+    let data ← inp.read toRead.toUSize
+    discard <| parser.write data
+    size := size - data.size
+    if data.size != toRead then
+      break
 ```
 
-(Upstream hashes each part with SHA-256; this library has no hash, so the
-example sums the bytes.) `parser.writeWith callbacks chunk` fires a
-`MultipartCallbacks` record instead (`onPartBegin`, `onPartData`, ...), and
-`QuerystringParser` / `OctetStreamParser` work the same way.
+`Environ`, `makeServer` and `Hashlib.sha256` are the examples' stand-ins for
+Python's `wsgiref` and `hashlib` (`examples/support/`). The `IO` objects
+(`MultipartParser.create`, `parseFormStream`) raise as upstream does; under
+them are pure parsers (`MultipartParser.new`, `.write`, `parseForm`) whose
+theorems are below.
 
 ## The public surface
 
 | python-multipart | lean-multipart |
 |---|---|
 | `QuerystringParser(callbacks, strict_parsing, max_size)` | `QuerystringParser.new (strictParsing := …) (maxSize := …)`, `.write`, `.finalize`, `.writeWith`, `QuerystringCallbacks` |
-| `MultipartParser(boundary, callbacks, max_size, max_header_count, max_header_size)` | `MultipartParser.new boundary cfg`, `.write`, `.writeWith`, `MultipartCallbacks` |
+| `MultipartParser(boundary, callbacks, max_size, max_header_count, max_header_size)` | `MultipartParser.create boundary callbacks cfg` (an `IO` object: `.write` raises), or pure: `MultipartParser.new boundary cfg`, `.write`, `.writeWith`, `MultipartCallbacks` |
 | `OctetStreamParser(callbacks, max_size)` | `OctetStreamParser.new`, `.write`, `.finalize`, `OctetStreamCallbacks` |
 | `FormParser(content_type, on_field, on_file, boundary=, file_name=, config=)` | `FormParser.create contentType boundary fileName config`, `.write`, `.finalize`, `.finalizeWith onField onFile` |
-| `create_form_parser(headers, …)`, `parse_form(headers, stream, on_field, on_file)` | `createFormParser headers`, `parseForm headers body`, `parseFormWith` |
+| `create_form_parser(headers, …)`, `parse_form(headers, stream, on_field, on_file)` | `createFormParser headers`, `parseFormStream headers stream onField onFile` (in `IO`), `parseForm headers body`, `parseFormWith` |
 | `parse_options_header(value)` | `parseOptionsHeader value : ByteArray × Params`, `Params.get "boundary"` |
 | `Field`, `File` (`field_name`, `value`, `file_name`, `content_type`, `size`) | `Field`, `File` (`fieldName`, `value`, `fileName`, `contentType`, `size`) |
 | `Base64Decoder`, `QuotedPrintableDecoder` | the same names, `.write`, `.finalize` |
@@ -177,11 +192,11 @@ what stepping byte by byte does, so every theorem is about the byte-wise
 ## Building and testing
 
 ```
-lake build              # library, proofs, tests, quickstart
+lake build              # library, proofs, tests, examples
 lake exe props          # 15 seeded properties (`lake exe props 42`)
 scripts/bench.sh        # native time and memory checks on 50 MB bodies
 lake exe conformance    # cases re-expressed from python-multipart's and Starlette's tests
-lake exe quickstart     # the examples above
+lake exe docs-index     # the ported docs/index.md examples (see examples/README.md)
 scripts/check.sh --pbt  # the whole CI gate
 ```
 

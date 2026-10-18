@@ -176,7 +176,29 @@ def singleByteCases : List Case :=
       name := s!"single bytes {n}"
       run := pure (checkFixture (fixture n) (bytesOf (unhex (fixture n).bodyHex))) }
 
-def cases : List Case := httpCases ++ singleByteCases ++ [
+/-! ## Ported examples
+
+Each ported example that prints is run and its output compared with
+upstream's, produced by `upstream-spec/.venv/bin/python -I
+tests/upstream/docs_index.py` (python-multipart 0.0.32). -/
+
+/-- Upstream's output for `docs/index.md`'s blocks, replaying its curl sessions. -/
+def docsIndexExpected : String :=
+  "== simple: curl -F foo=bar ==\n200 OK\nContent-type: text/plain\n\nParsed value parameter named: foo\n\n" ++
+  "== in-depth start: curl ==\n200 OK\nContent-type: text/plain\n\nHashes:\n\n" ++
+  "== in-depth: curl -F file=@/tmp/test.txt ==\n200 OK\nContent-type: text/plain\n\n" ++
+  "Part hash: 0b64696c0f7ddb9e3435341720988d5455b3b0f0724688f98ec8e6019af3d931\n"
+
+def exampleCases : List Case := [
+  { upstream := "docs/index.md (Quickstart: Simple Example, In-Depth Example)"
+    name := "example docs/index.md output matches upstream",
+    run := do
+      let out ← IO.Process.output { cmd := ".lake/build/bin/docs-index" }
+      if out.stdout != docsIndexExpected then IO.println s!"      got:\n{out.stdout}"
+      return out.exitCode == 0 && out.stdout == docsIndexExpected }
+]
+
+def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ [
   -- Querystring parser
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_simple_querystring"
     name := "querystring simple", run := qsIs {} ["foo=bar"] [("foo", "bar")] },

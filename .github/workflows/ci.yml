@@ -27,8 +27,8 @@ jobs:
         run: lake exe props
       - name: Conformance
         run: lake exe conformance
-      - name: Quickstart
-        run: lake exe quickstart
+      - name: Examples
+        run: lake exe docs-index
       - name: Native time and memory (50 MB bodies)
         run: scripts/bench.sh
       - name: Traceability

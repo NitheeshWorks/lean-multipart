@@ -23,8 +23,10 @@ lake exe props
 echo "== conformance =="
 lake exe conformance
 
-echo "== quickstart =="
-lake exe quickstart > /dev/null
+echo "== examples =="
+lake exe docs-index > /dev/null
+# The examples manifest check lives in the workspace's stack-tools (not in CI).
+if [[ -f ../stack-tools/check-examples.py ]]; then python3 ../stack-tools/check-examples.py "$PWD"; fi
 
 echo "== native time and memory =="
 scripts/bench.sh

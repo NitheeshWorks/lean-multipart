@@ -1,6 +1,6 @@
 name = "LeanMultipart"
 version = "0.1.0"
-defaultTargets = ["LeanMultipart", "props", "conformance", "quickstart"]
+defaultTargets = ["LeanMultipart", "props", "conformance", "docs-index"]
 
 # The verified library. Everything under LeanMultipart/ except Transport.lean is a
 # total function and the proof surface; see CONTRIBUTING.md.
@@ -24,10 +24,18 @@ root = "tests.Conformance"
 name = "Fixtures"
 roots = ["tests.Fixtures"]
 
-# The README quickstart, kept compiling: `lake exe quickstart`.
+# Helpers the ported examples use in place of Python's standard library
+# (`hashlib`, `wsgiref`); see examples/MANIFEST.toml.
+[[lean_lib]]
+name = "ExampleSupport"
+roots = ["examples.support.Hashlib", "examples.support.Wsgiref"]
+
+# python-multipart's docs/index.md, ported block by block:
+# `lake exe docs-index` replays the documented curl requests;
+# `lake exe docs-index serve <block>` serves the block on port 8123.
 [[lean_exe]]
-name = "quickstart"
-root = "examples.Quickstart"
+name = "docs-index"
+root = "examples.docs.Index"
 
 # Native time and memory checks: `scripts/bench.sh`.
 [[lean_exe]]
