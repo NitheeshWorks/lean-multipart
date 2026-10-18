@@ -372,8 +372,81 @@ def mpStep (cx : Mp.Ctx) (lim : FormLimits) (s : MpState) (c : UInt8) : MpState 
       else { s with inner := i' }
     | _, _ => { s with inner := i' }
 
+/-! A run of part data (see `Mp.dataSpan`) is taken at once here too, cut
+short for a field part so that the byte crossing `max_part_size` is stepped
+on its own. -/
+
+/-- Where a run may end: for a field part, before the byte that would cross `max_part_size`. -/
+def mpStop (lim : FormLimits) (s : MpState) (i stop : Nat) : Nat :=
+  if s.curIsFile then stop else min stop (i + (lim.maxPartSize - s.inner.data.size))
+
+def mpSpan (lim : FormLimits) (s : MpState) (b : ByteArray) (i stop : Nat) : Nat :=
+  if s.err.isSome then 0 else Mp.dataSpan s.inner b i (mpStop lim s i stop)
+
+def mpBulk (s : MpState) (b : ByteArray) (i n : Nat) : MpState := { s with inner := Mp.dataBulk s.inner b i n }
+
+theorem mpStep_data (cx : Mp.Ctx) (lim : FormLimits) (s : MpState) (c : UInt8) (he : s.err = none)
+    (hs : s.inner.phase = .partData (.idx 0)) (hc : c ≠ Byte.CR)
+    (hsz : s.curIsFile = false → s.inner.data.size + 1 ≤ lim.maxPartSize) :
+    mpStep cx lim s c = { s with inner := Mp.step cx s.inner c } := by
+  have hstep := Mp.step_data cx s.inner c hs hc
+  unfold mpStep
+  simp only [mpHalted, he, hs, Option.isSome_none, Bool.false_or, hstep]
+  cases hf : s.curIsFile
+  · have := hsz hf; simp [ByteArray.size_push]; omega
+  · simp
+
+theorem foldl_mpStep_data (cx : Mp.Ctx) (lim : FormLimits) : ∀ (l : Bytes) (s : MpState), s.err = none →
+    s.inner.phase = .partData (.idx 0) → (∀ x ∈ l, x ≠ Byte.CR) →
+    (s.curIsFile = false → s.inner.data.size + l.length ≤ lim.maxPartSize) →
+    l.foldl (mpStep cx lim) s = { s with inner := l.foldl (Mp.step cx) s.inner } := by
+  intro l
+  induction l with
+  | nil => intro s _ _ _ _; rfl
+  | cons c l ih =>
+    intro s he hs hl hsz
+    have hc := hl c (by simp)
+    have hstep := Mp.step_data cx s.inner c hs hc
+    rw [List.foldl_cons, List.foldl_cons, mpStep_data cx lim s c he hs hc
+      (fun h => by have := hsz h; simp at this; omega)]
+    refine ih _ he (by simp only [hstep]; exact hs) (fun x hx => hl x (by simp [hx])) ?_
+    intro h; have := hsz h; simp only [hstep, ByteArray.size_push]; simp at this; omega
+
+theorem mpSpan_le (lim : FormLimits) (s : MpState) (b : ByteArray) (i stop : Nat) :
+    mpSpan lim s b i stop ≤ stop - i := by
+  unfold mpSpan; split
+  · exact Nat.zero_le _
+  · have := Mp.dataSpan_le s.inner b i (mpStop lim s i stop)
+    have : mpStop lim s i stop ≤ stop := by unfold mpStop; split <;> omega
+    omega
+
+theorem mpBulk_eq (cx : Mp.Ctx) (lim : FormLimits) (s : MpState) (b : ByteArray) (i stop : Nat) :
+    mpBulk s b i (mpSpan lim s b i stop) = ((b.data.toList.drop i).take (mpSpan lim s b i stop)).foldl (mpStep cx lim) s := by
+  have hle : mpSpan lim s b i stop ≤ Mp.dataSpan s.inner b i (mpStop lim s i stop) := by
+    unfold mpSpan; split
+    · exact Nat.zero_le _
+    · exact Nat.le_refl _
+  by_cases h0 : mpSpan lim s b i stop = 0
+  · rw [h0]; simp [mpBulk, Mp.dataBulk]
+  · have he : s.err = none := by
+      unfold mpSpan at h0; cases h : s.err
+      · rfl
+      · simp [h] at h0
+    have hph := Mp.dataSpan_phase s.inner b i (mpStop lim s i stop) (by omega)
+    unfold mpBulk
+    rw [Mp.dataBulk_le cx s.inner b i _ _ hle]
+    refine (foldl_mpStep_data cx lim _ s he hph
+      (fun x hx => Mp.dataSpan_ne s.inner b i _ x (List.take_subset_take_left _ hle hx)) ?_).symm
+    intro hf
+    have hlen : ((b.data.toList.drop i).take (mpSpan lim s b i stop)).length ≤ mpSpan lim s b i stop :=
+      List.length_take_le _ _
+    have hd := Mp.dataSpan_le s.inner b i (mpStop lim s i stop)
+    simp only [mpStop, hf, Bool.false_eq_true, ↓reduceIte] at hd hle
+    omega
+
 def mpMachine (cx : Mp.Ctx) (lim : FormLimits) : Machine MpState :=
-  { step := mpStep cx lim, pos := (·.inner.pos), limit := none }
+  { step := mpStep cx lim, pos := (·.inner.pos), limit := none,
+    span := mpSpan lim, bulk := mpBulk, span_le := mpSpan_le lim, bulk_eq := mpBulk_eq cx lim }
 
 /-- The parts read, or the first error (a parser error is Starlette's
 "Invalid multipart data."). -/

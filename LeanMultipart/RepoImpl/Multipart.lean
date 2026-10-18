@@ -138,9 +138,100 @@ def step (cx : Ctx) (s : MState) (c : UInt8) : MState :=
     else fail s .noLFAfterHeaders p
   | .partData m => matchByte cx m s c
 
-/-- The machine: `step`, the byte counter, and the `maxSize` limit. The
-general chunking theorems of `Theory/Machine.lean` apply to it. -/
-def machine (cx : Ctx) : Machine MState := { step := step cx, pos := MState.pos, limit := cx.cfg.maxSize }
+/-! ## Runs of part data
+
+In part data with no delimiter byte matched, every byte but `CR` (the
+delimiter's first byte) is data, and `step` appends it. `dataSpan` finds
+such a run and `dataBulk` appends it with one copy; `dataBulk_eq` proves that
+is what `step` would do byte by byte, so `feedA` may take the shortcut. -/
+
+theorem dAt_zero (cx : Ctx) : cx.dAt 0 = Byte.CR := by
+  unfold Ctx.dAt; simp only [cx.h_delim, Boundary.delim, Boundary.delimL]
+  rfl
+
+/-- The length of the run of data bytes at `i`, before `stop` (0 if none). -/
+def dataSpan (s : MState) (b : ByteArray) (i stop : Nat) : Nat :=
+  match s.phase with
+  | .partData (.idx 0) => scanFor b Byte.CR stop i - i
+  | _ => 0
+
+/-- Append the `n` bytes at `i` to the part data. -/
+def dataBulk (s : MState) (b : ByteArray) (i n : Nat) : MState :=
+  if n = 0 then s else { s with pos := s.pos + n, data := b.copySlice i s.data s.data.size n false }
+
+theorem step_data (cx : Ctx) (s : MState) (c : UInt8) (hs : s.phase = .partData (.idx 0))
+    (hc : c ≠ Byte.CR) : step cx s c = { s with pos := s.pos + 1, data := s.data.push c } := by
+  obtain ⟨ph, pos, hc', hs', n, v, hd, d, ps⟩ := s
+  simp only at hs; subst hs
+  simp [step, matchByte, dAt_zero, hc, restart]
+
+theorem foldl_data (cx : Ctx) : ∀ (l : Bytes) (s : MState), s.phase = .partData (.idx 0) →
+    (∀ x ∈ l, x ≠ Byte.CR) →
+    l.foldl (step cx) s = { s with pos := s.pos + l.length, data := s.data ++ ⟨l.toArray⟩ } := by
+  intro l
+  induction l with
+  | nil => intro s _ _; simp
+  | cons c l ih =>
+    intro s hs hl
+    rw [List.foldl_cons, step_data cx s c hs (hl c (by simp)),
+      ih { s with pos := s.pos + 1, data := s.data.push c } hs (fun x hx => hl x (by simp [hx]))]
+    simp only [List.length_cons]
+    congr 1
+    · omega
+    · apply ByteArray.ext_toList; simp [ByteArray.data_append]
+
+theorem dataSpan_le (s : MState) (b : ByteArray) (i stop : Nat) : dataSpan s b i stop ≤ stop - i := by
+  unfold dataSpan; split
+  · rcases scanFor_le b Byte.CR stop _ i rfl with h | h <;> omega
+  · exact Nat.zero_le _
+
+theorem dataSpan_phase (s : MState) (b : ByteArray) (i stop : Nat) (h : dataSpan s b i stop ≠ 0) :
+    s.phase = .partData (.idx 0) := by
+  unfold dataSpan at h; split at h
+  · assumption
+  · exact absurd rfl h
+
+theorem dataSpan_ne (s : MState) (b : ByteArray) (i stop : Nat) :
+    ∀ x ∈ (b.data.toList.drop i).take (dataSpan s b i stop), x ≠ Byte.CR := by
+  unfold dataSpan; split
+  · exact scanFor_ne b Byte.CR stop _ i rfl
+  · simp
+
+/-- A run of data stays inside the input. -/
+theorem dataSpan_size (s : MState) (b : ByteArray) (i stop : Nat) : i + dataSpan s b i stop ≤ b.size ∨ dataSpan s b i stop = 0 := by
+  unfold dataSpan; split
+  · rcases scanFor_le b Byte.CR stop _ i rfl with h | h <;> omega
+  · exact Or.inr rfl
+
+/-- Any prefix of a run, appended at once, is what `step` does. -/
+theorem dataBulk_le (cx : Ctx) (s : MState) (b : ByteArray) (i stop k : Nat) (hk : k ≤ dataSpan s b i stop) :
+    dataBulk s b i k = ((b.data.toList.drop i).take k).foldl (step cx) s := by
+  unfold dataBulk
+  split
+  · rename_i h; rw [h]; rfl
+  · rename_i h
+    have hph := dataSpan_phase s b i stop (by omega)
+    have hne : ∀ x ∈ (b.data.toList.drop i).take k, x ≠ Byte.CR := fun x hx =>
+      dataSpan_ne s b i stop x (List.take_subset_take_left _ hk hx)
+    have hlen : ((b.data.toList.drop i).take k).length = k := by
+      rcases dataSpan_size s b i stop with hs | hs
+      · simp [Array.length_toList]; omega
+      · omega
+    rw [foldl_data cx _ s hph hne, hlen, copySlice_end]
+    congr 1
+    apply ByteArray.ext_toList
+    simp only [ByteArray.data_append, Array.toList_append, extract_toList]
+
+theorem dataBulk_eq (cx : Ctx) (s : MState) (b : ByteArray) (i stop : Nat) :
+    dataBulk s b i (dataSpan s b i stop) = ((b.data.toList.drop i).take (dataSpan s b i stop)).foldl (step cx) s :=
+  dataBulk_le cx s b i stop _ (Nat.le_refl _)
+
+/-- The machine: `step`, the byte counter, and the `maxSize` limit, with the
+shortcut for runs of data. The general chunking theorems of
+`Theory/Machine.lean` apply to it. -/
+def machine (cx : Ctx) : Machine MState :=
+  { step := step cx, pos := MState.pos, limit := cx.cfg.maxSize,
+    span := dataSpan, bulk := dataBulk, span_le := dataSpan_le, bulk_eq := dataBulk_eq cx }
 
 /-- Feed bytes (no truncation). -/
 def feed (cx : Ctx) (s : MState) (l : Bytes) : MState := l.foldl (step cx) s

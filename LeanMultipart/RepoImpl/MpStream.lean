@@ -93,6 +93,48 @@ def stepEv (cx : Mp.Ctx) : MState × Array MultipartEvent → UInt8 → MState �
   | .endBoundary, .done => (s', evs.push MultipartEvent.end)
   | _, _ => (s', evs)
 
+theorem stepEv_data (cx : Mp.Ctx) (s : MState) (evs : Array MultipartEvent) (c : UInt8)
+    (hs : s.phase = .partData (.idx 0)) (hc : c ≠ Byte.CR) :
+    stepEv cx (s, evs) c = (Mp.step cx s c, evs) := by
+  simp only [stepEv, Mp.step_data cx s c hs hc, hs]
+
+theorem foldl_stepEv_data (cx : Mp.Ctx) : ∀ (l : Bytes) (s : MState) (evs : Array MultipartEvent),
+    s.phase = .partData (.idx 0) → (∀ x ∈ l, x ≠ Byte.CR) →
+    l.foldl (stepEv cx) (s, evs) = (l.foldl (Mp.step cx) s, evs) := by
+  intro l
+  induction l with
+  | nil => intro _ _ _ _; rfl
+  | cons c l ih =>
+    intro s evs hs hl
+    have hc := hl c (by simp)
+    rw [List.foldl_cons, List.foldl_cons, stepEv_data cx s evs c hs hc]
+    exact ih _ _ (by rw [Mp.step_data cx s c hs hc]; exact hs) (fun x hx => hl x (by simp [hx]))
+
+/-- The data-run shortcut, with the events alongside (a run fires none). -/
+def evSpan (r : MState × Array MultipartEvent) (b : ByteArray) (i stop : Nat) : Nat := Mp.dataSpan r.1 b i stop
+
+def evBulk (r : MState × Array MultipartEvent) (b : ByteArray) (i n : Nat) : MState × Array MultipartEvent :=
+  (Mp.dataBulk r.1 b i n, r.2)
+
+theorem evBulk_eq (cx : Mp.Ctx) (r : MState × Array MultipartEvent) (b : ByteArray) (i stop : Nat) :
+    evBulk r b i (evSpan r b i stop) = ((b.data.toList.drop i).take (evSpan r b i stop)).foldl (stepEv cx) r := by
+  obtain ⟨s, evs⟩ := r
+  unfold evBulk evSpan
+  rw [Mp.dataBulk_eq cx]
+  by_cases h : Mp.dataSpan s b i stop = 0
+  · rw [h]; rfl
+  · exact (foldl_stepEv_data cx _ s evs (Mp.dataSpan_phase s b i stop h) (Mp.dataSpan_ne s b i stop)).symm
+
+/-- Fold a chunk's bytes, taking runs of data at once. -/
+def foldChunk (cx : Mp.Ctx) (chunk : ByteArray) (n : Nat) (r : MState × Array MultipartEvent) :
+    MState × Array MultipartEvent :=
+  bytesFoldRun (stepEv cx) evSpan evBulk (fun _ => false) chunk n 0 r
+
+theorem foldChunk_eq (cx : Mp.Ctx) (chunk : ByteArray) (n : Nat) (r : MState × Array MultipartEvent) :
+    foldChunk cx chunk n r = bytesFold (stepEv cx) chunk n 0 r :=
+  bytesFoldRun_eq (stepEv cx) evSpan evBulk (fun _ => false) (fun _ _ h => by cases h)
+    (fun r b i stop => Mp.dataSpan_le r.1 b i stop) (evBulk_eq cx) chunk n _ 0 r rfl
+
 /-- End of a chunk: report the part data known so far. -/
 def flush (s : MState) (evs : Array MultipartEvent) : MState × Array MultipartEvent :=
   match s.phase with
@@ -109,7 +151,7 @@ and the number of bytes processed, or the error. -/
 def write (p : MultipartParser) (chunk : ByteArray) :
     Except MultipartParseError (MultipartParser × Array MultipartEvent × Nat) :=
   let n := Mp.room p.cx p.st chunk.size
-  let (s, evs) := bytesFold (stepEv p.cx) chunk n 0 (p.st, #[])
+  let (s, evs) := foldChunk p.cx chunk n (p.st, #[])
   let (s, evs) := flush s evs
   match s.phase with
   | .failed e => .error ⟨e, (e.offset : Int) - p.st.pos⟩

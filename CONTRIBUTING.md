@@ -59,6 +59,20 @@ raised, the retained state is within the limits; `urlencoded_bounded` and
 rest on (a step adds at most the field or part it was reading) are in
 `Proofs/StepFacts.lean`.
 
+### Runs of bytes are taken at once
+
+A `Machine` may carry a shortcut: `span s b i stop` says how many bytes from
+`i` it handles all alike, and `bulk` consumes them at once. Its fields
+`span_le` and `bulk_eq` require the shortcut to agree with folding `step`,
+and `bytesFoldRun_eq` proves the fold with shortcuts (and early stop) equals
+the plain fold, so `feedA` and `feedAUntil` use it and no theorem mentions
+it. The multipart machine's shortcut is a run of part data up to the next
+`CR` (`Mp.dataSpan`, `Mp.dataBulk`, appended with one `copySlice`); the
+Starlette machine cuts the run before the byte that crosses
+`max_part_size`, and `MultipartParser.write` uses it with its events
+(`foldChunk_eq`). This took the whole 50 MB file-part parse from about 3 s
+to about 150 ms.
+
 ### The round trips are codec instances
 
 `Theory/Codec.lean` defines `Reads M P w Q` (from every state in `P`,
@@ -109,7 +123,7 @@ Each has a property in `tests/Props.lean` or cases in
 | Base64 and quoted-printable decoders | a correctness statement needs an encoder and a model of `binascii`'s non-strict rules; conformance cases mirror every upstream decoder test, properties check them against reference encoders |
 | `FormParser` field/file interpretation (CTE, missing name, content type) | it is a pure function of the proved multipart result; conformance cases mirror upstream's |
 | Error kinds and offsets | the fixtures in `tests/Fixtures.lean` carry upstream's expected offsets |
-| Time and memory on large inputs | `scripts/bench.sh` (in CI) asserts parse time and peak memory (at most three times the body plus the runtime baseline) on 50 MB bodies, including the limit cases; `bigChecks` in `tests/Props.lean` covers 2 to 8 MB inputs |
+| Time and memory on large inputs | `scripts/bench.sh` (in CI) asserts parse time and peak memory (bounds in `tests/Bench.lean`: whole-part parses within 2× Starlette's 455 ms, peak at most three times the body plus the runtime baseline, four for a binary file part) on 50 MB bodies, including the limit cases; `bigChecks` in `tests/Props.lean` covers 2 to 8 MB inputs |
 
 ### Deviations from upstream
 

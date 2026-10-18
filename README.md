@@ -153,20 +153,26 @@ What is tested rather than proved, and every deviation from upstream, is in
 ## Performance
 
 `scripts/bench.sh` (run in CI) builds each body natively and checks time and
-peak memory; the peak includes the body itself. Starlette, streaming the same
-bodies, takes 73 to 109 ms and about 121 MB.
+peak memory against the bounds in `tests/Bench.lean`; the peak includes the
+body itself. Starlette takes 73 to 109 ms and about 121 MB when a limit stops
+a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 
 | Input | Outcome | Parse time | Peak memory |
 |---|---|---|---|
-| `a=` + 50 MB value | `fieldTooLarge` | 59 ms | 68 MB |
-| one 50 MB multipart field | `partTooLarge` | 65 ms | 68 MB |
-| 1,000,000 tiny parts (58 MB) | `tooManyFields` | 8 ms | 68 MB |
+| `a=` + 50 MB value | `fieldTooLarge` | 64 ms | 68 MB |
+| one 50 MB multipart field | `partTooLarge` | 3 ms | 64 MB |
+| 1,000,000 tiny parts (58 MB) | `tooManyFields` | 9 ms | 68 MB |
 | 1,000,000 `a=b&` (4 MB) | `tooManyFields` | < 1 ms | 13 MB |
-| 50 MB file part, whole body | parsed | 3.2 s | 149 MB |
-| 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 2.6 s | 64 MB |
+| 50 MB file part, whole body | parsed | 150 ms | 115 MB |
+| 50 MB random binary file part, whole body | parsed | 260 ms | 220 MB |
+| 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 150 ms | 68 MB |
 
 Parsers read the packed bytes directly and keep their buffers in
-`ByteArray`; the limit parsers stop reading at the first error.
+`ByteArray`; the limit parsers stop reading at the first error. Inside part
+data the multipart machine finds the next `CR` and appends the run before it
+with one copy (`Mp.dataSpan`, `Mp.dataBulk`); `Mp.dataBulk_eq` proves that is
+what stepping byte by byte does, so every theorem is about the byte-wise
+`step`.
 
 ## Building and testing
 

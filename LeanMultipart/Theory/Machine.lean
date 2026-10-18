@@ -63,11 +63,168 @@ theorem bytesFold_full {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (s 
     bytesFold f b b.size 0 s = b.data.toList.foldl f s := by
   rw [bytesFold_take, List.take_of_length_le (by rw [Array.length_toList]; exact Nat.le_refl _)]
 
-/-- A byte machine. -/
+/-- A fold from a fixed point stays there. -/
+theorem bytesFold_fixed {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (stop : Nat) (s : τ)
+    (hs : ∀ c, f s c = s) : ∀ (n i : Nat), stop - i = n → bytesFold f b stop i s = s := by
+  intro n
+  induction n with
+  | zero =>
+    intro j hj; unfold bytesFold; split
+    · rename_i h; omega
+    · rfl
+  | succ k ihk =>
+    intro j hj; unfold bytesFold; split
+    · rw [hs]; exact ihk (j + 1) (by omega)
+    · rfl
+
+/-- Folding the next `n` bytes as a list, then the rest, is the fold. -/
+theorem bytesFold_skip {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (stop i n : Nat) (s : τ)
+    (hn : n ≤ stop - i) :
+    bytesFold f b stop i s = bytesFold f b stop (i + n) (((b.data.toList.drop i).take n).foldl f s) := by
+  rw [bytesFold_eq f b stop _ i s rfl, bytesFold_eq f b stop _ (i + n) _ rfl, ← List.foldl_append,
+    ← List.drop_drop, ← List.take_add, show n + (stop - (i + n)) = stop - i by omega]
+
+/-- `bytesFold` with two shortcuts: it stops as soon as `halted` holds, and
+where `span` says the next `n > 0` bytes can be consumed at once, `bulk`
+consumes them (a run of part data, say, appended with one copy). -/
+def bytesFoldRun {τ : Type} (f : τ → UInt8 → τ) (span : τ → ByteArray → Nat → Nat → Nat)
+    (bulk : τ → ByteArray → Nat → Nat → τ) (halted : τ → Bool) (b : ByteArray) (stop : Nat)
+    (i : Nat) (s : τ) : τ :=
+  if halted s then s
+  else if h : i < stop ∧ i < b.size then
+    let n := span s b i stop
+    if hn : n = 0 then bytesFoldRun f span bulk halted b stop (i + 1) (f s b[i])
+    else bytesFoldRun f span bulk halted b stop (i + n) (bulk s b i n)
+  else s
+termination_by stop - i
+decreasing_by all_goals omega
+
+/-- The shortcuts are sound: halted states are fixed points, and `bulk`
+does what folding `span` bytes would. -/
+theorem bytesFoldRun_eq {τ : Type} (f : τ → UInt8 → τ) (span : τ → ByteArray → Nat → Nat → Nat)
+    (bulk : τ → ByteArray → Nat → Nat → τ) (halted : τ → Bool)
+    (hfix : ∀ s c, halted s = true → f s c = s)
+    (hspan : ∀ s b i stop, span s b i stop ≤ stop - i)
+    (hbulk : ∀ s b i stop, bulk s b i (span s b i stop) =
+      ((b.data.toList.drop i).take (span s b i stop)).foldl f s)
+    (b : ByteArray) (stop : Nat) :
+    ∀ (n i : Nat) (s : τ), stop - i = n →
+      bytesFoldRun f span bulk halted b stop i s = bytesFold f b stop i s := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+    intro i s hn
+    by_cases hs : halted s = true
+    · unfold bytesFoldRun; simp only [hs, ↓reduceIte]
+      exact (bytesFold_fixed f b stop s (fun c => hfix s c hs) _ i rfl).symm
+    · unfold bytesFoldRun
+      simp only [hs, Bool.false_eq_true, ↓reduceIte]
+      split
+      · rename_i h
+        split
+        · rw [ih (stop - (i + 1)) (by omega) (i + 1) _ rfl]
+          conv => rhs; unfold bytesFold
+          simp only [h, and_self, ↓reduceDIte]
+        · rename_i hn0
+          have hle := hspan s b i stop
+          rw [ih (stop - (i + span s b i stop)) (by omega) _ _ rfl, hbulk,
+            ← bytesFold_skip f b stop i _ s hle]
+      · rename_i h
+        unfold bytesFold; simp only [h, ↓reduceDIte]
+
+/-- The first index from `i`, before `stop`, holding `c`; or where the
+search ran out (`stop`, the end of `b`, or `i` itself). -/
+def scanFor (b : ByteArray) (c : UInt8) (stop i : Nat) : Nat :=
+  if h : i < stop ∧ i < b.size then (if b[i] = c then i else scanFor b c stop (i + 1)) else i
+termination_by stop - i
+
+theorem scanFor_ge (b : ByteArray) (c : UInt8) (stop : Nat) :
+    ∀ (n i : Nat), stop - i = n → i ≤ scanFor b c stop i := by
+  intro n
+  induction n with
+  | zero => intro i hn; unfold scanFor; split
+            · omega
+            · exact Nat.le_refl _
+  | succ n ih =>
+    intro i hn; unfold scanFor; split
+    · split
+      · exact Nat.le_refl _
+      · have := ih (i + 1) (by omega); omega
+    · exact Nat.le_refl _
+
+/-- Past `i`, the search stays within `stop` and the end of `b`. -/
+theorem scanFor_le (b : ByteArray) (c : UInt8) (stop : Nat) :
+    ∀ (n i : Nat), stop - i = n → scanFor b c stop i = i ∨ (scanFor b c stop i ≤ stop ∧ scanFor b c stop i ≤ b.size) := by
+  intro n
+  induction n with
+  | zero => intro i hn; unfold scanFor; split
+            · omega
+            · exact Or.inl rfl
+  | succ n ih =>
+    intro i hn; unfold scanFor; split
+    · rename_i h
+      split
+      · exact Or.inl rfl
+      · rcases ih (i + 1) (by omega) with h' | h'
+        · rw [h']; omega
+        · exact Or.inr h'
+    · exact Or.inl rfl
+
+/-- No byte before the result is `c`. -/
+theorem scanFor_ne (b : ByteArray) (c : UInt8) (stop : Nat) :
+    ∀ (n i : Nat), stop - i = n → ∀ x ∈ (b.data.toList.drop i).take (scanFor b c stop i - i), x ≠ c := by
+  intro n
+  induction n with
+  | zero => intro i hn x hx; unfold scanFor at hx; split at hx
+            · omega
+            · simp at hx
+  | succ n ih =>
+    intro i hn x hx; unfold scanFor at hx; split at hx
+    · rename_i h
+      split at hx
+      · simp at hx
+      · rename_i hc
+        have hge := scanFor_ge b c stop _ (i + 1) rfl
+        have hl : i < b.data.toList.length := by rw [Array.length_toList]; exact h.2
+        rw [List.drop_eq_getElem_cons hl, show scanFor b c stop (i + 1) - i = (scanFor b c stop (i + 1) - (i + 1)) + 1 by omega,
+          List.take_succ_cons, List.mem_cons] at hx
+        rcases hx with hx | hx
+        · subst hx; simpa [ByteArray.getElem_eq_getElem_data] using hc
+        · exact ih (i + 1) (by omega) x hx
+    · simp at hx
+
+/-- Copying `n` bytes of `a` from `i` onto the end of `b` (growing its
+capacity geometrically) appends them. -/
+theorem copySlice_end (a b : ByteArray) (i n : Nat) :
+    a.copySlice i b b.size n false = b ++ a.extract i (i + n) := by
+  apply ByteArray.ext
+  simp only [ByteArray.copySlice, ByteArray.data_append, ByteArray.data_extract]
+  have h1 : b.data.extract 0 b.size = b.data := Array.extract_eq_self_of_le (Nat.le_refl _)
+  have h2 : b.data.extract (b.size + min n (a.data.size - i)) = #[] := by
+    apply Array.ext'; rw [Array.toList_extract, List.extract_eq_take_drop, List.drop_of_length_le]
+    · exact List.take_nil
+    · rw [Array.length_toList]; exact Nat.le_add_right _ _
+  rw [h1, h2, Array.append_empty]
+
+/-- The bytes `[i, i + n)` of `b`, as a list, are those of `b.extract i (i + n)`. -/
+theorem extract_toList (b : ByteArray) (i n : Nat) :
+    (b.extract i (i + n)).data.toList = (b.data.toList.drop i).take n := by
+  rw [ByteArray.data_extract, Array.toList_extract, List.extract_eq_take_drop, Nat.add_sub_cancel_left]
+
+/-- A byte machine: a transition on one byte, a byte counter and an input
+limit, and optionally a shortcut (`span`, `bulk`) for a run of bytes the
+machine handles all alike, which `feedA` uses and the proofs never see. -/
 structure Machine (σ : Type) where
   step : σ → UInt8 → σ
   pos : σ → Nat
   limit : Option Nat
+  /-- How many of the bytes from index `i`, before `stop`, `bulk` can take at once (0: none). -/
+  span : σ → ByteArray → Nat → Nat → Nat := fun _ _ _ _ => 0
+  /-- Take `n` bytes from index `i` at once. -/
+  bulk : σ → ByteArray → Nat → Nat → σ := fun s _ _ _ => s
+  span_le : ∀ s b i stop, span s b i stop ≤ stop - i := by intros; exact Nat.zero_le _
+  bulk_eq : ∀ s b i stop, bulk s b i (span s b i stop) =
+    ((b.data.toList.drop i).take (span s b i stop)).foldl step s := by intros; rfl
 
 namespace Machine
 
@@ -86,7 +243,11 @@ def room (s : σ) (n : Nat) : Nat :=
 def feedT (s : σ) (l : Bytes) : σ := M.feed s (l.take (M.room s l.length))
 
 /-- Feed a byte array, truncated at the limit. -/
-def feedA (s : σ) (b : ByteArray) : σ := bytesFold M.step b (M.room s b.size) 0 s
+def feedA (s : σ) (b : ByteArray) : σ :=
+  bytesFoldRun M.step M.span M.bulk (fun _ => false) b (M.room s b.size) 0 s
+
+theorem feedA_fold (s : σ) (b : ByteArray) : M.feedA s b = bytesFold M.step b (M.room s b.size) 0 s :=
+  bytesFoldRun_eq _ _ _ _ (fun _ _ h => by cases h) M.span_le M.bulk_eq b _ _ 0 s rfl
 
 /-- Feed chunks one after another. -/
 def feedChunks (s : σ) : List Bytes → σ
@@ -146,7 +307,8 @@ theorem feedChunks_eq (h : M.Chunkable) (s : σ) (cs : List Bytes) :
 
 theorem feedA_eq (s : σ) (b : ByteArray) : M.feedA s b = M.feedT s b.data.toList := by
   have hsz : b.size = b.data.toList.length := (Array.length_toList).symm
-  unfold feedA feedT feed
+  rw [feedA_fold]
+  unfold feedT feed
   rw [bytesFold_take, hsz]
 
 theorem feedA_append (h : M.Chunkable) (s : σ) (a b : ByteArray) :
@@ -170,58 +332,15 @@ theorem feedA_chunks (h : M.Chunkable) (s : σ) (cs : List ByteArray) :
 A machine whose halted states are fixed points can stop reading as soon as
 it halts (a limit error, a parse error, the end of the message). -/
 
-/-- `bytesFold`, stopping when `halted` holds. -/
-def bytesFoldUntil {τ : Type} (f : τ → UInt8 → τ) (halted : τ → Bool) (b : ByteArray) (stop : Nat)
-    (i : Nat) (s : τ) : τ :=
-  if halted s then s
-  else if h : i < stop ∧ i < b.size then bytesFoldUntil f halted b stop (i + 1) (f s b[i]) else s
-termination_by stop - i
-
-theorem bytesFoldUntil_eq {τ : Type} (f : τ → UInt8 → τ) (halted : τ → Bool)
-    (hfix : ∀ s c, halted s = true → f s c = s) (b : ByteArray) (stop : Nat) :
-    ∀ (n i : Nat) (s : τ), stop - i = n → bytesFoldUntil f halted b stop i s = bytesFold f b stop i s := by
-  intro n
-  induction n with
-  | zero =>
-    intro i s hn
-    unfold bytesFoldUntil bytesFold
-    split
-    · split
-      · rename_i h; omega
-      · rfl
-    · split
-      · rename_i h; omega
-      · rfl
-  | succ n ih =>
-    intro i s hn
-    by_cases hs : halted s = true
-    · -- a halted state stays put, so the full fold returns it too
-      have hfold : ∀ (k j : Nat), stop - j = k → bytesFold f b stop j s = s := by
-        intro k
-        induction k with
-        | zero =>
-          intro j hj; unfold bytesFold; split
-          · rename_i h; omega
-          · rfl
-        | succ k ihk =>
-          intro j hj; unfold bytesFold; split
-          · rw [hfix s _ hs]; exact ihk (j + 1) (by omega)
-          · rfl
-      unfold bytesFoldUntil; simp only [hs, ↓reduceIte]; exact (hfold _ i rfl).symm
-    · unfold bytesFoldUntil bytesFold
-      simp only [hs, Bool.false_eq_true, ↓reduceIte]
-      split
-      · exact ih (i + 1) _ (by omega)
-      · rfl
-
 /-- Feed a byte array, stopping when the machine halts. -/
 def feedAUntil (halted : σ → Bool) (s : σ) (b : ByteArray) : σ :=
-  bytesFoldUntil M.step halted b (M.room s b.size) 0 s
+  bytesFoldRun M.step M.span M.bulk halted b (M.room s b.size) 0 s
 
 theorem feedAUntil_eq {halted : σ → Bool} (hfix : ∀ s c, halted s = true → M.step s c = s)
     (s : σ) (b : ByteArray) : M.feedAUntil halted s b = M.feedA s b := by
-  unfold feedAUntil feedA
-  exact bytesFoldUntil_eq M.step halted hfix b _ _ 0 s rfl
+  unfold feedAUntil
+  rw [feedA_fold]
+  exact bytesFoldRun_eq _ _ _ _ hfix M.span_le M.bulk_eq b _ _ 0 s rfl
 
 /-! ## Forgetting buffers -/
 

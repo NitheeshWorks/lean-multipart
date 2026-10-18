@@ -471,7 +471,7 @@ theorem write_eq (cx : Mp.Ctx) (P : MState) (chunk : ByteArray) :
   have hsz : chunk.size = chunk.data.toList.length := (Array.length_toList).symm
   unfold write
   simp only
-  rw [bytesFold_take, ← hsz]
+  rw [foldChunk_eq, bytesFold_take, ← hsz]
   generalize List.foldl (stepEv cx) (P, #[]) _ = r
   obtain ⟨r1, r2⟩ := r
   rw [flush_append r1 r2]
