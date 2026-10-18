@@ -85,7 +85,7 @@ def plusName (mib : Nat) : ByteArray :=
   let unit := u "hello+café"
   (build [.rep unit (mib * mb / unit.size + 1)]).extract 0 (mib * mb) ++ u "=1"
 
-def body : String → ByteArray
+def bodyOf : String → ByteArray
   | "url50" => build [.bytes (u "a="), .fill 120 (50 * mb)]
   | "qsMany" => build [.rep (u "a=b&") 1000000]
   | "mp50" => build [.bytes (u "--boundary\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\n"),
@@ -96,6 +96,10 @@ def body : String → ByteArray
       .rand (50 * mb), .bytes (u "\r\n--boundary--\r\n")]
   | "file50" | "stream50" => build [.bytes (u "--boundary\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n"),
       .fill 120 (50 * mb), .bytes (u "\r\n--boundary--\r\n")]
+  | "nearMiss50" => build [.bytes (u "--boundary\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n"),
+      .rep (u "\r\n--boundarx") (50 * mb / 12), .fill 120 (50 * mb % 12), .bytes (u "\r\n--boundary--\r\n")]
+  | "crlf50" => build [.bytes (u "--boundary\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n"),
+      .rep (u "\r\n") (25 * mb), .bytes (u "\r\n--boundary--\r\n")]
   | "percent50" => build [.fill 37 (50 * mb)]
   | "cl1m" => build [.fill 49 mb]
   | "cl10m" => build [.fill 49 (10 * mb)]
@@ -117,7 +121,38 @@ def body : String → ByteArray
     | some (_, k, m) => qsValue k m
     | none => ByteArray.empty
 
+def body (c : String) : ByteArray :=
+  let c := if c.startsWith "st-" || c.startsWith "wb-" then (c.drop 3).toString else c
+  bodyOf c
+
+/-- Starlette's incremental parse: the body in 64 KiB chunks, as the
+transport delivers it, with every data byte of every part counted. The
+limits are raised so that the 50 MiB field and the million parts are read. -/
+def stream (b : ByteArray) : String := Id.run do
+  let chunk := 64 * 1024
+  let lim : FormLimits := { maxPartSize := 64 * mb, maxFields := 2000000, maxFiles := 2000000 }
+  let mut p := Starlette.MultipartStream.new bnd lim
+  let mut parts := 0
+  let mut total := 0
+  let mut i := 0
+  while i < b.size do
+    match p.feed (b.extract i (i + chunk)) with
+    | .ok (p', evs) =>
+      p := p'
+      for e in evs do
+        match e with
+        | .data d => total := total + d.size
+        | .partEnd => parts := parts + 1
+        | .part _ => pure ()
+    | .error e => return s!"error {repr e}"
+    i := i + chunk
+  return s!"{parts} parts, {total} data bytes"
+
+def streamCases : List String := ["st-mp50", "st-mpMany", "st-file50", "st-fileBin50", "st-nearMiss50", "st-crlf50"]
+
 def run (c : String) (b : ByteArray) : String :=
+  if streamCases.contains c then stream b else
+  if c.startsWith "wb-" then s!"{(Mp.parse { boundary := bnd } b).parts.length} parts" else
   match c with
   | "url50" | "qsMany" => match API.Starlette.parseUrlencoded {} b with
     | .error e => s!"{repr e}" | .ok fs => s!"ok {fs.1.length} fields"
