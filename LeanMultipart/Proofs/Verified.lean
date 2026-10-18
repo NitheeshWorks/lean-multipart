@@ -1,5 +1,9 @@
 import LeanMultipart.Proofs.Percent
 import LeanMultipart.Proofs.Querystring
+import LeanMultipart.Proofs.MultipartRoundTrip
+import LeanMultipart.Proofs.Stream
+import LeanMultipart.Proofs.Form
+import LeanMultipart.Proofs.Wrappers
 
 /-!
 # The harness: one `Verified<Layer>` structure per layer
