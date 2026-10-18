@@ -269,9 +269,9 @@ def properties : List Property := [
         | .error e, some e' => e == e'
         | _, _ => false
       return (bif ok then none else some s!"{showB body} chunks {chunks}", r) },
-  { name := "smoke dispositionParams_formPart (safe names)"
+  { name := "smoke dispositionParams_formPart, and tested with `;` in names"
     check := fun r => Id.run do
-      let alpha := asciiArr "aZ09 _-.()=,é:/"
+      let alpha := asciiArr "aZ09 _-.()=,é:/;"
       let (n, r) := genFrom alpha 10 r
       let (f, r) := genFrom alpha 10 r
       let (hasFile, r) := r.nat 2

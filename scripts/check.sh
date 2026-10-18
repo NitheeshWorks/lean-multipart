@@ -23,6 +23,9 @@ lake exe props
 echo "== conformance =="
 lake exe conformance
 
+echo "== quickstart =="
+lake exe quickstart > /dev/null
+
 echo "== traceability =="
 python3 scripts/traceability-check.py
 

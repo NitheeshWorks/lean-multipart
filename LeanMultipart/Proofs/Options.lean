@@ -254,7 +254,7 @@ theorem parseL_dispositionL (n : Bytes) (f : Option Bytes) (hn : SafeParam n)
       (ascii "form-data", (ascii "name", n) :: f.toList.map (fun x => (ascii "filename", x))) := by
   have hne : (dispositionL n f).isEmpty = false := by simp [dispositionL, ascii]
   have hsemi : (dispositionL n f).contains Byte.SEMI = true := by
-    simp [dispositionL, List.contains_append]
+    simp [dispositionL]
   have hpp : parseParam (dispositionL n f) =
       ascii "form-data" :: (ascii "name" ++ Byte.EQ :: Byte.DQUOTE :: (n ++ [Byte.DQUOTE])) ::
         f.toList.map (fun x => ascii "filename" ++ Byte.EQ :: Byte.DQUOTE :: (x ++ [Byte.DQUOTE])) := by
@@ -316,6 +316,6 @@ theorem dispositionParams_formPart (n : ByteArray) (f ct : Option ByteArray) (bo
   have hnf : (ascii "name" == ascii "filename") = false := by decide
   have hfn : (ascii "filename" == ascii "name") = false := by decide
   cases f <;> simp only [Options.lookup, Option.toList_some, Option.toList_none, List.map_cons, List.map_nil,
-    List.find?_cons, beq_self_eq_true, hnf, hfn, List.find?_nil, Option.map_some, Option.map_none] <;> rfl
+    List.find?_cons, beq_self_eq_true, hnf, List.find?_nil, Option.map_some, Option.map_none] <;> rfl
 
 end LeanMultipart

@@ -16,11 +16,359 @@ upstream_url = "https://github.com/Kludex/python-multipart"
 upstream_commit = "51ff1a438146bc67740908c6e69df919c09cf7ca"
 upstream_license = "Apache-2.0"
 
-# [[requirement]]
-# id = "..."                  # stable id, e.g. "routing.first-match"
-# upstream = "tests/test_x.py::test_y"   # or a docs section
-# title = "..."
-# status = "implemented"
-# realises = ["LeanMultipart.Foo.bar"]
-# theorem = ["LeanMultipart.Foo.bar_spec"]
-# test = ["tests/Conformance.lean::name"]
+[[requirement]]
+id = "percent.roundtrip"
+upstream = "urllib.parse.quote / unquote_to_bytes (used by Starlette's FormParser)"
+title = "Percent-encoding round trip on any continuation"
+status = "implemented"
+realises = ["LeanMultipart.percentEncode", "LeanMultipart.percentDecode", "LeanMultipart.API.percentEncode"]
+theorem = ["LeanMultipart.percentDecode_percentEncode_extB", "LeanMultipart.percentDecode_percentEncode_ext"]
+test = ["tests/Props.lean::smoke percentDecode_percentEncode"]
+
+[[requirement]]
+id = "percent.quote-plus"
+upstream = "urllib.parse.quote_plus / unquote_plus"
+title = "quote_plus round trip, + as space"
+status = "implemented"
+realises = ["LeanMultipart.quotePlus", "LeanMultipart.unquotePlus"]
+theorem = ["LeanMultipart.unquotePlus_quotePlus_extB"]
+test = ["tests/Props.lean::smoke unquotePlus_quotePlus"]
+
+[[requirement]]
+id = "urlencoded.roundtrip"
+upstream = "urllib.parse.urlencode / Starlette FormParser"
+title = "Urlencoded print/parse round trip, plain and _ext"
+status = "implemented"
+realises = ["LeanMultipart.urlencodeB", "LeanMultipart.urldecodeB", "LeanMultipart.API.urlencode"]
+theorem = ["LeanMultipart.urldecodeB_urlencodeB", "LeanMultipart.urldecodeB_urlencodeB_ext"]
+test = ["tests/Props.lean::smoke urldecode_urlencode"]
+
+[[requirement]]
+id = "urlencoded.string"
+upstream = "Starlette FormParser (unquote_plus on str)"
+title = "String-level urlencode/urldecode round trip"
+status = "tested"
+realises = ["LeanMultipart.urlencodeStr", "LeanMultipart.urldecodeStr"]
+test = ["tests/Props.lean::tested urlencodeStr/urldecodeStr"]
+note = "Byte-level round trip is proved; the String lift needs an ASCII UTF-8 lemma core lacks."
+
+[[requirement]]
+id = "qs.ampersand"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_multiple_querystring"
+title = "Fields separated by &"
+status = "implemented"
+realises = ["LeanMultipart.Qs.step"]
+theorem = ["LeanMultipart.Qs.parse_total"]
+test = ["tests/Conformance.lean::querystring multiple"]
+
+[[requirement]]
+id = "qs.semicolon-is-data"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_semicolon_is_data_not_a_field_separator"
+title = "; is data, not a separator"
+status = "implemented"
+realises = ["LeanMultipart.Qs.step"]
+test = ["tests/Conformance.lean::querystring semicolon is data"]
+
+[[requirement]]
+id = "qs.blank-segments"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_querystring_blank_beginning"
+title = "Empty segments skipped; bare names have empty value"
+status = "implemented"
+realises = ["LeanMultipart.Qs.step", "LeanMultipart.Qs.finish"]
+test = ["tests/Conformance.lean::querystring blank beginning", "tests/Conformance.lean::querystring trailing bare name"]
+
+[[requirement]]
+id = "qs.strict"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_strict_parsing_fail_double_sep"
+title = "Strict mode: duplicate & and missing = are errors"
+status = "implemented"
+realises = ["LeanMultipart.Qs.step", "LeanMultipart.QsErrorKind"]
+test = ["tests/Conformance.lean::querystring strict double separator (all splits)", "tests/Conformance.lean::querystring strict no value"]
+
+[[requirement]]
+id = "qs.max-size"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_too_large_field"
+title = "max_size truncates the input"
+status = "implemented"
+realises = ["LeanMultipart.Qs.feedT", "LeanMultipart.Machine.feedT"]
+theorem = ["LeanMultipart.Qs.parse_total", "LeanMultipart.Machine.feedT_append"]
+test = ["tests/Conformance.lean::querystring max size"]
+
+[[requirement]]
+id = "qs.max-size-positive"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_invalid_max_size"
+title = "max_size < 1 rejected"
+status = "deviation"
+realises = ["LeanMultipart.QsConfig", "LeanMultipart.MultipartConfig"]
+test = ["tests/Conformance.lean::max_size below 1 cannot be configured"]
+note = "A structure invariant makes the configuration unconstructible instead of raising ValueError."
+
+[[requirement]]
+id = "qs.streaming"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_streaming_break"
+title = "Streaming QuerystringParser gives the whole-buffer result for every split"
+status = "implemented"
+realises = ["LeanMultipart.QuerystringParser.write", "LeanMultipart.QuerystringParser.parseChunks"]
+theorem = ["LeanMultipart.QuerystringParser.parseChunks_eq"]
+test = ["tests/Conformance.lean::querystring streaming break", "tests/Props.lean::smoke QuerystringParser.parseChunks_eq"]
+
+[[requirement]]
+id = "qs.error-offsets"
+upstream = "tests/test_multipart.py::TestQuerystringParser::test_strict_parsing_fail_double_sep"
+title = "Error offsets: chunk-relative offset plus absolute error.offset"
+status = "deviation"
+realises = ["LeanMultipart.QuerystringParseError", "LeanMultipart.MultipartParseError"]
+test = ["tests/Conformance.lean::querystring strict double separator (all splits)"]
+note = "Upstream reports only the chunk-relative offset; the absolute one is also given."
+
+[[requirement]]
+id = "options.parse"
+upstream = "tests/test_multipart.py::TestParseOptionsHeader"
+title = "parse_options_header: quoting, escapes, IE6 filenames, ReDoS-safe"
+status = "implemented"
+realises = ["LeanMultipart.parseOptionsHeader", "LeanMultipart.Params.get", "LeanMultipart.Options.parseL"]
+test = ["tests/Conformance.lean::options quoted escapes", "tests/Conformance.lean::options IE6 filename", "tests/Conformance.lean::options ReDoS header terminates"]
+
+[[requirement]]
+id = "options.rfc2231-ignored"
+upstream = "tests/test_multipart.py::TestParseOptionsHeader::test_ignores_rfc_2231_extended_param"
+title = "filename* and other extended parameters ignored (RFC 7578 §4.2)"
+status = "implemented"
+realises = ["LeanMultipart.Options.addParams"]
+test = ["tests/Conformance.lean::options ignores param*", "tests/Conformance.lean::options plain over extended"]
+
+[[requirement]]
+id = "options.disposition-roundtrip"
+upstream = "RFC 7578 §4.2 Content-Disposition"
+title = "Content-Disposition name/filename round trip"
+status = "implemented"
+realises = ["LeanMultipart.dispositionValue", "LeanMultipart.formPart", "LeanMultipart.dispositionParams"]
+theorem = ["LeanMultipart.dispositionParams_formPart", "LeanMultipart.Options.parseL_dispositionL"]
+test = ["tests/Props.lean::smoke dispositionParams_formPart"]
+
+[[requirement]]
+id = "options.disposition-semicolon"
+upstream = "RFC 7578 §4.2"
+title = "Content-Disposition names containing ;"
+status = "tested"
+realises = ["LeanMultipart.Options.group"]
+test = ["tests/Props.lean::smoke dispositionParams_formPart"]
+note = "The proof excludes ; in names; the property test includes it."
+
+[[requirement]]
+id = "options.backslash"
+upstream = "UP-005"
+title = "Quoted value ending in an escaped backslash mis-split, as upstream"
+status = "deviation"
+realises = ["LeanMultipart.Options.quoteDiff"]
+test = ["tests/Conformance.lean::options backslash order"]
+note = "Matches upstream's counting heuristic (UP-005); the printer and theorem exclude backslashes."
+
+[[requirement]]
+id = "multipart.boundary"
+upstream = "tests/test_multipart.py::TestFormParser::test_boundary_too_long"
+title = "Boundary: 1..256 bytes of RFC 2046 bchars; parsed boundary satisfies its refinement"
+status = "deviation"
+realises = ["LeanMultipart.Boundary", "LeanMultipart.ValidBoundary", "LeanMultipart.API.parseBoundary"]
+theorem = ["LeanMultipart.API.parseBoundary_valid"]
+test = ["tests/Conformance.lean::boundary length 256 / 257"]
+note = "Upstream accepts any byte; only bchars are accepted here (a CR would break the delimiter search). Length bound is upstream's 256, not RFC 2046's 70."
+
+[[requirement]]
+id = "multipart.roundtrip"
+upstream = "tests/test_multipart.py::TestFormParser::test_http"
+title = "Multipart print/parse round trip on any epilogue"
+status = "implemented"
+realises = ["LeanMultipart.Mp.print", "LeanMultipart.Mp.parse", "LeanMultipart.API.printMultipart"]
+theorem = ["LeanMultipart.Mp.multipart_parse_print_ext", "LeanMultipart.Mp.reads_message"]
+test = ["tests/Props.lean::smoke multipart_parse_print_ext"]
+
+[[requirement]]
+id = "multipart.fixtures"
+upstream = "tests/test_multipart.py::TestFormParser::test_http"
+title = "Upstream HTTP fixtures parse to the expected fields, files and error offsets"
+status = "implemented"
+realises = ["LeanMultipart.FormParser.write", "LeanMultipart.FormParser.finalize"]
+test = ["tests/Conformance.lean::http fixture single_field", "tests/Fixtures.lean"]
+
+[[requirement]]
+id = "multipart.streaming"
+upstream = "tests/test_multipart.py::TestFormParser::test_random_splitting"
+title = "Streaming MultipartParser gives the whole-buffer parts for every split"
+status = "implemented"
+realises = ["LeanMultipart.MultipartParser.write", "LeanMultipart.MultipartParser.parseChunks"]
+theorem = ["LeanMultipart.MultipartParser.parseChunks_eq", "LeanMultipart.FormParser.write_chunks"]
+test = ["tests/Conformance.lean::every two-way split", "tests/Conformance.lean::fixed-size blocks after a skip", "tests/Props.lean::smoke MultipartParser.parseChunks_eq"]
+
+[[requirement]]
+id = "multipart.total"
+upstream = "tests/test_multipart.py::TestFormParser::test_request_body_fuzz"
+title = "The parser is total and localises errors"
+status = "implemented"
+realises = ["LeanMultipart.Mp.step"]
+theorem = ["LeanMultipart.Mp.parse_total"]
+test = ["tests/Props.lean::smoke MultipartParser.parseChunks_eq: events = whole-buffer parts (fuzzed"]
+
+[[requirement]]
+id = "multipart.preamble"
+upstream = "tests/test_multipart.py::TestFormParser::test_multipart_parser_preamble_before_first_boundary"
+title = "Preamble after a leading CRLF is skipped, across chunks (UP-001)"
+status = "deviation"
+realises = ["LeanMultipart.MPhase"]
+test = ["tests/Conformance.lean::preamble skipped"]
+note = "Upstream fails when a chunk ends inside the preamble (UP-001); an explicit preamble phase makes every chunking parse."
+
+[[requirement]]
+id = "multipart.epilogue"
+upstream = "tests/test_multipart.py::TestFormParser::test_multipart_parser_ignores_epilogue"
+title = "Epilogue after the closing boundary ignored"
+status = "implemented"
+realises = ["LeanMultipart.Mp.step"]
+theorem = ["LeanMultipart.Mp.reads_epilogue"]
+test = ["tests/Conformance.lean::epilogue ignored", "tests/Conformance.lean::data after the last boundary"]
+
+[[requirement]]
+id = "multipart.header-limits"
+upstream = "tests/test_multipart.py::TestFormParser::test_multipart_header_count_limit"
+title = "max_header_count and max_header_size"
+status = "implemented"
+realises = ["LeanMultipart.MultipartConfig", "LeanMultipart.Mp.headerFieldByte"]
+test = ["tests/Conformance.lean::header count limit", "tests/Conformance.lean::header size limit"]
+
+[[requirement]]
+id = "multipart.header-error-order"
+upstream = "UP-006"
+title = "Header size checked per byte before the character class"
+status = "deviation"
+realises = ["LeanMultipart.Mp.headerFieldByte"]
+test = ["tests/Conformance.lean::header size limit"]
+note = "Upstream's reported error depends on chunking (UP-006); both reject."
+
+[[requirement]]
+id = "multipart.header-events"
+upstream = "tests/test_multipart.py::TestFormParser::test_header_begin_callback"
+title = "Header callbacks; names and values reported whole"
+status = "deviation"
+realises = ["LeanMultipart.MultipartParser.stepEv", "LeanMultipart.MultipartCallbacks"]
+test = ["tests/Conformance.lean::header_begin fired per header"]
+note = "Upstream may split a header name or value at chunk ends; the concatenation is the same."
+
+[[requirement]]
+id = "multipart.max-size"
+upstream = "tests/test_multipart.py::TestFormParser::test_max_size_multipart"
+title = "max_size truncates the body"
+status = "implemented"
+realises = ["LeanMultipart.Mp.feedT"]
+theorem = ["LeanMultipart.Mp.feedT_append"]
+test = ["tests/Conformance.lean::multipart max size", "tests/Conformance.lean::form parser max body size"]
+
+[[requirement]]
+id = "form.dispatch"
+upstream = "tests/test_multipart.py::TestFormParser::test_bad_content_type"
+title = "FormParser selects the parser from the Content-Type"
+status = "implemented"
+realises = ["LeanMultipart.FormParser.create", "LeanMultipart.FormKind.select", "LeanMultipart.createFormParser"]
+test = ["tests/Conformance.lean::unknown content type", "tests/Conformance.lean::no boundary", "tests/Conformance.lean::create_form_parser octet stream"]
+
+[[requirement]]
+id = "form.fields-files"
+upstream = "tests/test_multipart.py::TestFormParser::test_file_content_type_header"
+title = "Fields and files with names, filenames, content types"
+status = "implemented"
+realises = ["LeanMultipart.Field", "LeanMultipart.File", "LeanMultipart.Form.item"]
+test = ["tests/Conformance.lean::file content type", "tests/Conformance.lean::field without content type"]
+
+[[requirement]]
+id = "form.missing-name"
+upstream = "tests/test_multipart.py::TestFormParser::test_bad_content_disposition"
+title = "A part without a name is an error"
+status = "implemented"
+realises = ["LeanMultipart.Form.headersFinished"]
+test = ["tests/Conformance.lean::missing field name"]
+
+[[requirement]]
+id = "form.none-values"
+upstream = "tests/test_multipart.py::TestFormParser::test_handles_None_fields"
+title = "Urlencoded field without data has value none (UP-004)"
+status = "implemented"
+realises = ["LeanMultipart.Form.ofQs"]
+test = ["tests/Conformance.lean::urlencoded None fields"]
+note = "Matches the implementation, contrary to upstream's docstring (UP-004)."
+
+[[requirement]]
+id = "form.cte"
+upstream = "tests/test_multipart.py::test_content_transfer_encoding_is_case_insensitive"
+title = "Content-Transfer-Encoding base64 / quoted-printable / identity"
+status = "tested"
+realises = ["LeanMultipart.decodeBase64", "LeanMultipart.decodeQuotedPrintable", "LeanMultipart.Base64Decoder", "LeanMultipart.QuotedPrintableDecoder"]
+test = ["tests/Conformance.lean::CTE case-insensitive", "tests/Conformance.lean::bad CTE", "tests/Conformance.lean::QP finalised before callback", "tests/Props.lean::tested base64 decoder"]
+note = "Decoders are mirrored against every upstream decoder test and reference encoders."
+
+[[requirement]]
+id = "form.cte-chunking"
+upstream = "UP-002, UP-003"
+title = "Transfer-encoded parts decoded as one write"
+status = "deviation"
+realises = ["LeanMultipart.Form.item"]
+test = ["tests/Conformance.lean::CTE case-insensitive"]
+note = "Upstream's decoded bytes depend on write boundaries (UP-002, UP-003); the whole body is decoded at once."
+
+[[requirement]]
+id = "form.callbacks"
+upstream = "tests/test_multipart.py::TestFormParser::test_querystring"
+title = "FormParser on_field/on_file"
+status = "deviation"
+realises = ["LeanMultipart.FormParser.finalizeWith", "LeanMultipart.parseFormWith"]
+test = ["tests/Conformance.lean::form parser urlencoded"]
+note = "Callbacks fire at finalize, not during write; items and order are upstream's."
+
+[[requirement]]
+id = "form.octet"
+upstream = "tests/test_multipart.py::TestOctetStreamParser::test_simple"
+title = "OctetStreamParser and octet-stream FormParser"
+status = "implemented"
+realises = ["LeanMultipart.OctetStreamParser.write", "LeanMultipart.OctetStreamParser.finalize"]
+test = ["tests/Conformance.lean::octet stream parser simple", "tests/Conformance.lean::octet stream max size"]
+
+[[requirement]]
+id = "form.parse-form"
+upstream = "tests/test_multipart.py::TestHelperFunctions::test_parse_form_content_length"
+title = "parse_form over headers, honouring Content-Length"
+status = "deviation"
+realises = ["LeanMultipart.parseForm", "LeanMultipart.Headers.get"]
+test = ["tests/Conformance.lean::parse_form honours Content-Length", "tests/Conformance.lean::parse_form rejects a negative Content-Length"]
+note = "Takes the body as a byte array rather than a stream with chunk_size."
+
+[[requirement]]
+id = "form.file-storage"
+upstream = "python_multipart/multipart.py File (UPLOAD_DIR, MAX_MEMORY_FILE_SIZE)"
+title = "Spooling files to disk"
+status = "excluded"
+realises = ["LeanMultipart.File"]
+note = "Files are held in memory; the upload options are IO and out of scope."
+
+[[requirement]]
+id = "starlette.limits"
+upstream = "starlette tests/test_formparsers.py::test_too_many_fields_raise"
+title = "max_fields, max_files, max_part_size"
+status = "implemented"
+realises = ["LeanMultipart.API.Starlette.parseUrlencoded", "LeanMultipart.API.Starlette.parseMultipartForm"]
+theorem = ["LeanMultipart.Starlette.parseUrlencodedRaw_ok", "LeanMultipart.Starlette.parseMultipartRaw_ok"]
+test = ["tests/Conformance.lean::starlette too many fields", "tests/Conformance.lean::starlette part too large", "tests/Props.lean::smoke Starlette limits"]
+
+[[requirement]]
+id = "starlette.boundary"
+upstream = "starlette tests/test_formparsers.py::test_missing_boundary_parameter"
+title = "Missing or invalid boundary"
+status = "implemented"
+realises = ["LeanMultipart.Starlette.parseMultipartRaw"]
+test = ["tests/Conformance.lean::starlette missing boundary", "tests/Conformance.lean::starlette boundary too long"]
+
+[[requirement]]
+id = "perf.linear"
+upstream = "review finding (quadratic streaming, stack depth)"
+title = "Linear time and constant stack on large inputs"
+status = "tested"
+realises = ["LeanMultipart.QuerystringParser.write", "LeanMultipart.percentDecode"]
+test = ["tests/Props.lean::bigChecks"]
+note = "Timing is checked by running large inputs, not proved."

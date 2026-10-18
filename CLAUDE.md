@@ -13,6 +13,7 @@ under github.com/NitheeshWorks (lean-fastapi and its dependencies, one repo each
 lake build                              # library + proofs + test executables
 lake exe props [seed]                   # property tests, < 1 s
 lake exe conformance                    # upstream-mirroring cases
+lake exe quickstart                     # the README quickstart
 lake env lean --run scripts/Axioms.lean LeanMultipart   # axiom hygiene
 scripts/check.sh [--quick|--pbt]        # the whole gate
 lake env lean LeanMultipart/Proofs/Foo.lean     # check one file (never bare `lean`)

@@ -68,7 +68,7 @@ theorem unquotePlus_quotePlus_extB (b rest : ByteArray) :
 continuation. -/
 theorem urldecodeB_urlencodeB_ext (ps : List (ByteArray × ByteArray)) (rest : ByteArray) :
     urldecodeB (urlencodeB ps ++ ⟨#[Byte.AMP]⟩ ++ rest) = ps ++ urldecodeB rest := by
-  simp only [urldecodeB, urlencodeB, ba_append_toList, bytes_toList_toArray]
+  simp only [urldecodeB, urlencodeB, ba_append_toList]
   rw [Qs.urlencode_urldecode_ext, List.map_append, List.map_map]
   congr 1
   conv => rhs; rw [← List.map_id ps]

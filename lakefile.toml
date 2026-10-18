@@ -1,6 +1,6 @@
 name = "LeanMultipart"
 version = "0.1.0"
-defaultTargets = ["LeanMultipart", "props", "conformance"]
+defaultTargets = ["LeanMultipart", "props", "conformance", "quickstart"]
 
 # The verified library. Everything under LeanMultipart/ except Transport.lean is a
 # total function and the proof surface; see CONTRIBUTING.md.
@@ -23,3 +23,8 @@ root = "tests.Conformance"
 [[lean_lib]]
 name = "Fixtures"
 roots = ["tests.Fixtures"]
+
+# The README quickstart, kept compiling: `lake exe quickstart`.
+[[lean_exe]]
+name = "quickstart"
+root = "examples.Quickstart"
