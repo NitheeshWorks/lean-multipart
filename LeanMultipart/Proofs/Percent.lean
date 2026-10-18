@@ -143,4 +143,29 @@ theorem quotePlusL_no_sep (l : Bytes) : ∀ c ∈ quotePlusL l, c ≠ Byte.AMP �
           · rw [e2]; exact hd ⟨_, Nat.mod_lt _ (by decide)⟩
     · exact ih x hx
 
+/-! ## The tail-recursive forms equal the list forms -/
+
+theorem percentEncodeTR_eq (l : Bytes) (acc : Array UInt8) :
+    (percentEncodeTR l acc).toList = acc.toList ++ percentEncodeL l := by
+  induction l generalizing acc with
+  | nil => simp [percentEncodeTR, percentEncodeL]
+  | cons c cs ih =>
+    simp only [percentEncodeTR, percentEncodeL, ih]
+    split <;> simp
+
+theorem quotePlusTR_eq (l : Bytes) (acc : Array UInt8) :
+    (quotePlusTR l acc).toList = acc.toList ++ quotePlusL l := by
+  induction l generalizing acc with
+  | nil => simp [quotePlusTR, quotePlusL]
+  | cons c cs ih =>
+    simp only [quotePlusTR, quotePlusL, ih]
+    split
+    · simp_all
+    · split <;> simp_all
+
+theorem percentDecodeTR_eq (l : Bytes) (acc : Array UInt8) :
+    (percentDecodeTR l acc).toList = acc.toList ++ percentDecodeL l := by
+  induction l using percentDecodeL.induct generalizing acc <;>
+    simp_all [percentDecodeTR, percentDecodeL]
+
 end LeanMultipart

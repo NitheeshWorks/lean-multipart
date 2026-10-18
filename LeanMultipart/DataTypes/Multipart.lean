@@ -25,7 +25,10 @@ structure MultipartConfig where
   maxSize : Option Nat := none
   maxHeaderCount : Nat := 8
   maxHeaderSize : Nat := 4096 + 128
-  deriving Inhabited, Repr
+  /-- Upstream rejects `max_size < 1`. -/
+  h_maxSize : ∀ m, maxSize = some m → 0 < m := by intro m h; cases h <;> decide
+
+instance : Inhabited MultipartConfig := ⟨{}⟩
 
 /-- What went wrong, and the absolute byte offset where it was detected. The
 kinds correspond one-to-one to the messages of upstream's

@@ -2,3 +2,4 @@ import LeanMultipart.DataTypes.Bytes
 import LeanMultipart.DataTypes.Boundary
 import LeanMultipart.DataTypes.Multipart
 import LeanMultipart.DataTypes.Querystring
+import LeanMultipart.DataTypes.Form

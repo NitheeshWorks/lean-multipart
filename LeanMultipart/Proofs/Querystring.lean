@@ -58,11 +58,6 @@ theorem feedT_append (cfg : QsConfig) (s : QsState) (a b : Bytes) :
     · rw [Nat.min_eq_left (by omega : m - s.pos ≤ a.length),
         show m - (s.pos + (m - s.pos)) = 0 by omega, show m - s.pos - a.length = 0 by omega]
 
-/-- Feeding the chunks of a list one after another, as a `QsParser` does. -/
-def feedChunks (cfg : QsConfig) (s : QsState) : List Bytes → QsState
-  | [] => s
-  | c :: cs => feedChunks cfg (feedT cfg s c) cs
-
 theorem feedChunks_eq (cfg : QsConfig) (s : QsState) (cs : List Bytes) :
     feedChunks cfg s cs = feedT cfg s cs.flatten := by
   induction cs generalizing s with
@@ -126,9 +121,6 @@ theorem feed_errInv (cfg : QsConfig) (s : QsState) (l : Bytes) (h : ErrInv s) :
 theorem finish_failed {s : QsState} {e : QsError} (h : (finish s).phase = .failed e) :
     s.phase = .failed e := by
   unfold finish at h; split at h <;> simp_all [finishField]
-
-/-- The number of bytes the whole-buffer parser processes. -/
-def processed (cfg : QsConfig) (l : Bytes) : Nat := (feedT cfg {} l).pos
 
 /-- Totality: the parser consumes exactly `min(len, maxSize)` bytes, and an
 error's offset is one of them. -/

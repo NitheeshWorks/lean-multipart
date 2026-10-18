@@ -18,3 +18,8 @@ root = "tests.Props"
 [[lean_exe]]
 name = "conformance"
 root = "tests.Conformance"
+
+# The upstream HTTP fixtures, as data for the conformance runner.
+[[lean_lib]]
+name = "Fixtures"
+roots = ["tests.Fixtures"]

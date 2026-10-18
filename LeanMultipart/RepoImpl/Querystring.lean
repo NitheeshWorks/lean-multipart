@@ -66,6 +66,14 @@ def room (cfg : QsConfig) (s : QsState) (n : Nat) : Nat :=
 def feedT (cfg : QsConfig) (s : QsState) (l : Bytes) : QsState :=
   feed cfg s (l.take (room cfg s l.length))
 
+/-- Feeding the chunks of a list one after another, as a `QsParser` does. -/
+def feedChunks (cfg : QsConfig) (s : QsState) : List Bytes → QsState
+  | [] => s
+  | c :: cs => feedChunks cfg (feedT cfg s c) cs
+
+/-- The number of bytes the whole-buffer parser processes. -/
+def processed (cfg : QsConfig) (l : Bytes) : Nat := (feedT cfg {} l).pos
+
 /-- End of input: close a field in progress. -/
 def finish (s : QsState) : QsState :=
   match s.phase with
@@ -88,79 +96,6 @@ def parse (cfg : QsConfig) (b : ByteArray) : Except QsError (List QsField) :=
 
 end Qs
 
-/-! ## The callback-style parser -/
-
-/-- Upstream's `QuerystringParser` object: the machine state plus how much
-of the current name and value has already been reported. -/
-structure QsParser where
-  cfg : QsConfig := {}
-  st : QsState := {}
-  nameSent : Nat := 0
-  valueSent : Nat := 0
-  deriving Inhabited
-
-namespace QsParser
-
-private def slice (a : Array UInt8) (i : Nat) : ByteArray := ⟨a.extract i a.size⟩
-
-private def emitIf (evs : Array QsEvent) (b : ByteArray) (mk : ByteArray → QsEvent) :
-    Array QsEvent :=
-  if b.size == 0 then evs else evs.push (mk b)
-
-/-- One byte: the next state and the callbacks the transition fires. -/
-def stepEv (p : QsParser) (evs : Array QsEvent) (c : UInt8) : QsParser × Array QsEvent :=
-  let s := p.st
-  let s' := Qs.step p.cfg s c
-  match s.phase, s'.phase with
-  | .beforeField _, .fieldName => ({ p with st := s', nameSent := 0, valueSent := 0 }, evs.push .fieldStart)
-  | .beforeField _, .fieldData => ({ p with st := s', nameSent := 0, valueSent := 0 }, evs.push .fieldStart)
-  | .fieldName, .fieldData =>
-    ({ p with st := s', nameSent := s.name.size }, emitIf evs (slice s.name p.nameSent) .fieldName)
-  | .fieldName, .beforeField _ =>
-    ({ p with st := s', nameSent := 0 },
-      (emitIf evs (slice s.name p.nameSent) .fieldName).push .fieldEnd)
-  | .fieldData, .beforeField _ =>
-    ({ p with st := s', valueSent := 0 },
-      (emitIf evs (slice s.value p.valueSent) .fieldData).push .fieldEnd)
-  | _, _ => ({ p with st := s' }, evs)
-
-/-- Report what is buffered for the field in progress (end of a chunk). -/
-def flush (p : QsParser) (evs : Array QsEvent) : QsParser × Array QsEvent :=
-  match p.st.phase with
-  | .fieldName =>
-    ({ p with nameSent := p.st.name.size }, emitIf evs (slice p.st.name p.nameSent) .fieldName)
-  | .fieldData =>
-    ({ p with valueSent := p.st.value.size }, emitIf evs (slice p.st.value p.valueSent) .fieldData)
-  | _ => (p, evs)
-
-/-- A fresh parser. -/
-def new (cfg : QsConfig := {}) : QsParser := { cfg }
-
-/-- Upstream's `write`: feed a chunk, get the callbacks it fires and the
-number of bytes processed (fewer than the chunk only under `maxSize`). -/
-def write (p : QsParser) (chunk : ByteArray) : QsParser × Array QsEvent × Nat :=
-  let n := Qs.room p.cfg p.st chunk.size
-  let (p', evs) := (chunk.data.extract 0 n).foldl (fun (acc : QsParser × Array QsEvent) c =>
-    stepEv acc.1 acc.2 c) (p, #[])
-  let (p'', evs') := flush p' evs
-  (p'', evs', n)
-
-/-- Upstream's `finalize`: close a field in progress, then `end`. -/
-def finalize (p : QsParser) : QsParser × Array QsEvent :=
-  let (p', evs) := flush p #[]
-  match p'.st.phase with
-  | .fieldName | .fieldData =>
-    ({ p' with st := Qs.finish p'.st, nameSent := 0, valueSent := 0 }, (evs.push .fieldEnd).push .end)
-  | _ => (p', evs.push .end)
-
-/-- The error, if the machine has failed. -/
-def error? (p : QsParser) : Option QsError :=
-  match p.st.phase with
-  | .failed e => some e
-  | _ => none
-
-end QsParser
-
 /-! ## urlencode / urldecode -/
 
 /-- One `name=value` pair, `quote_plus`-encoded. -/
@@ -178,5 +113,22 @@ def urldecodeL (l : Bytes) : List (Bytes × Bytes) :=
   match Qs.parseL {} l with
   | .ok fs => fs.map (fun f => (unquotePlusL f.1.data.toList, unquotePlusL f.2.data.toList))
   | .error _ => []
+
+/-- `urlencode` on byte arrays. -/
+def urlencodeB (ps : List (ByteArray × ByteArray)) : ByteArray :=
+  ⟨(urlencodeL (ps.map fun p => (p.1.data.toList, p.2.data.toList))).toArray⟩
+
+/-- `urldecode` on byte arrays. -/
+def urldecodeB (b : ByteArray) : List (ByteArray × ByteArray) :=
+  (urldecodeL b.data.toList).map fun p => (⟨p.1.toArray⟩, ⟨p.2.toArray⟩)
+
+/-- `urlencode` on strings: UTF-8, then `quote_plus`. The result is ASCII. -/
+def urlencodeStr (ps : List (String × String)) : String :=
+  latin1Decode (urlencodeB (ps.map fun p => (p.1.toUTF8, p.2.toUTF8)))
+
+/-- `urldecode` on strings: each name and value is UTF-8 if valid, else
+Latin-1. -/
+def urldecodeStr (s : String) : List (String × String) :=
+  (urldecodeB s.toUTF8).map fun p => (decodeUtf8OrLatin1 p.1, decodeUtf8OrLatin1 p.2)
 
 end LeanMultipart

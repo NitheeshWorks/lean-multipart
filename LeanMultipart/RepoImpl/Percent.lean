@@ -59,11 +59,40 @@ def plusToSpace (c : UInt8) : UInt8 := if c == Byte.PLUS then Byte.SPACE else c
 /-- `unquote_plus` on bytes. -/
 def unquotePlusL (l : Bytes) : Bytes := percentDecodeL (l.map plusToSpace)
 
+/-! ## Tail-recursive forms
+
+The list definitions above are the specification; these accumulate into an
+array so that large inputs do not exhaust the stack. `Proofs/Percent.lean`
+proves each equal to its list form.
+-/
+
+def percentEncodeTR : Bytes → Array UInt8 → Array UInt8
+  | [], acc => acc
+  | c :: cs, acc =>
+    percentEncodeTR cs (if Byte.isUnreserved c then acc.push c else acc ++ (pctTriple c).toArray)
+
+def quotePlusTR : Bytes → Array UInt8 → Array UInt8
+  | [], acc => acc
+  | c :: cs, acc =>
+    quotePlusTR cs
+      (if Byte.isUnreserved c then acc.push c else if c == Byte.SPACE then acc.push Byte.PLUS
+       else acc ++ (pctTriple c).toArray)
+
+def percentDecodeTR : Bytes → Array UInt8 → Array UInt8
+  | [], acc => acc
+  | c :: a :: b :: rest, acc =>
+    if c == Byte.PERCENT then
+      match hexVal? a, hexVal? b with
+      | some x, some y => percentDecodeTR rest (acc.push (x * 16 + y).toUInt8)
+      | _, _ => percentDecodeTR (a :: b :: rest) (acc.push c)
+    else percentDecodeTR (a :: b :: rest) (acc.push c)
+  | c :: rest, acc => percentDecodeTR rest (acc.push c)
+
 /-! ## ByteArray wrappers -/
 
-def percentEncode (b : ByteArray) : ByteArray := ⟨(percentEncodeL b.data.toList).toArray⟩
-def percentDecode (b : ByteArray) : ByteArray := ⟨(percentDecodeL b.data.toList).toArray⟩
-def quotePlus (b : ByteArray) : ByteArray := ⟨(quotePlusL b.data.toList).toArray⟩
-def unquotePlus (b : ByteArray) : ByteArray := ⟨(unquotePlusL b.data.toList).toArray⟩
+def percentEncode (b : ByteArray) : ByteArray := ⟨percentEncodeTR b.data.toList #[]⟩
+def percentDecode (b : ByteArray) : ByteArray := ⟨percentDecodeTR b.data.toList #[]⟩
+def quotePlus (b : ByteArray) : ByteArray := ⟨quotePlusTR b.data.toList #[]⟩
+def unquotePlus (b : ByteArray) : ByteArray := ⟨percentDecodeTR (b.data.toList.map plusToSpace) #[]⟩
 
 end LeanMultipart

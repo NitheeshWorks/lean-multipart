@@ -10,11 +10,15 @@ callback events.
 
 namespace LeanMultipart
 
-/-- Upstream's `QuerystringParser` options. -/
+/-- Upstream's `QuerystringParser` options. Upstream rejects `max_size < 1`
+with `ValueError`; here the bound is a field, so such a configuration cannot
+be built. -/
 structure QsConfig where
   strict : Bool := false
   maxSize : Option Nat := none
-  deriving Inhabited, Repr
+  h_maxSize : ∀ m, maxSize = some m → 0 < m := by intro m h; cases h <;> decide
+
+instance : Inhabited QsConfig := ⟨{}⟩
 
 inductive QsErrorKind where
   /-- "Skipping duplicate ampersand" (strict mode) -/
