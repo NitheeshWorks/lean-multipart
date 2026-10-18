@@ -1,4 +1,4 @@
-import LeanMultipart.RepoImpl.Form
+import LeanMultipart.RepoImpl
 
 /-!
 # Specifications: multipart and forms
@@ -39,10 +39,10 @@ def MultipartRoundTrip (cx : Mp.Ctx) : Prop :=
       (Mp.parseL cx (Mp.printL cx.boundary ps ++ epi)).error = none ∧
       (Mp.parseL cx (Mp.printL cx.boundary ps ++ epi)).current = none
 
-/-- The streaming multipart parser fed any chunking agrees with the
-whole-buffer parser. -/
+/-- The streaming `MultipartParser`, fed any split of the input and its
+callbacks collected, gives the whole-buffer parts (or error). -/
 def MpStreamingAgrees (cx : Mp.Ctx) : Prop :=
-  ∀ cs : List Bytes, Mp.result (Mp.feedChunks cx {} cs) = Mp.parseL cx cs.flatten
+  ∀ chunks : List ByteArray, MultipartParser.parseChunks cx chunks = (Mp.parse cx (concatChunks chunks)).toExcept
 
 /-- The multipart parser is total. -/
 def MpTotal (cx : Mp.Ctx) : Prop :=

@@ -20,55 +20,29 @@ namespace Qs
 
 /-! ## Chunking -/
 
-theorem feed_append (cfg : QsConfig) (s : QsState) (a b : Bytes) :
-    feed cfg s (a ++ b) = feed cfg (feed cfg s a) b := by
-  simp [feed, List.foldl_append]
-
 @[simp] theorem step_pos (cfg : QsConfig) (s : QsState) (c : UInt8) :
     (step cfg s c).pos = s.pos + 1 := by
   unfold step
   cases s.phase <;> simp only [nameByte, finishField] <;> split <;> (try split) <;> (try split) <;> rfl
 
-theorem feed_pos (cfg : QsConfig) (s : QsState) (l : Bytes) :
-    (feed cfg s l).pos = s.pos + l.length := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons c cs ih => simp only [feed, List.foldl_cons] at *; rw [ih]; simp; omega
+theorem counts (cfg : QsConfig) : (machine cfg).Counts := step_pos cfg
 
-theorem take_min_length (l : Bytes) (r : Nat) : l.take (min l.length r) = l.take r := by
-  by_cases h : l.length ≤ r
-  · rw [Nat.min_eq_left h, List.take_of_length_le h, List.take_of_length_le (Nat.le_refl _)]
-  · rw [Nat.min_eq_right (by omega)]
+theorem feed_append (cfg : QsConfig) (s : QsState) (a b : Bytes) :
+    feed cfg s (a ++ b) = feed cfg (feed cfg s a) b := (machine cfg).feed_append s a b
+
+theorem feed_pos (cfg : QsConfig) (s : QsState) (l : Bytes) :
+    (feed cfg s l).pos = s.pos + l.length := (machine cfg).feed_pos (counts cfg) s l
 
 theorem feedT_append (cfg : QsConfig) (s : QsState) (a b : Bytes) :
-    feedT cfg (feedT cfg s a) b = feedT cfg s (a ++ b) := by
-  unfold feedT room
-  cases hm : cfg.maxSize with
-  | none =>
-    dsimp only
-    rw [List.take_of_length_le (Nat.le_refl b.length),
-      List.take_of_length_le (Nat.le_refl (a ++ b).length), feed_append,
-      List.take_of_length_le (Nat.le_refl a.length)]
-  | some m =>
-    rw [feed_pos, take_min_length, take_min_length, List.length_take, take_min_length,
-      ← feed_append, List.take_append]
-    by_cases h : a.length ≤ m - s.pos
-    · rw [List.take_of_length_le (l := a) h, Nat.min_eq_right h]
-      congr 3; omega
-    · rw [Nat.min_eq_left (by omega : m - s.pos ≤ a.length),
-        show m - (s.pos + (m - s.pos)) = 0 by omega, show m - s.pos - a.length = 0 by omega]
+    feedT cfg (feedT cfg s a) b = feedT cfg s (a ++ b) := (machine cfg).feedT_append (counts cfg) s a b
+
+@[simp] theorem feedT_nil (cfg : QsConfig) (s : QsState) : feedT cfg s [] = s := (machine cfg).feedT_nil s
 
 theorem feedChunks_eq (cfg : QsConfig) (s : QsState) (cs : List Bytes) :
-    feedChunks cfg s cs = feedT cfg s cs.flatten := by
-  induction cs generalizing s with
-  | nil => simp only [feedChunks, feedT, room]; split <;> simp [feed]
-  | cons c cs ih => simp only [feedChunks, ih, feedT_append, List.flatten_cons]
+    feedChunks cfg s cs = feedT cfg s cs.flatten := (machine cfg).feedChunks_eq (counts cfg) s cs
 
-theorem feedA_eq (cfg : QsConfig) (s : QsState) (b : ByteArray) : feedA cfg s b = feedT cfg s b.data.toList := by
-  have hsz : b.size = b.data.toList.length := (Array.length_toList).symm
-  unfold feedA feedT feed
-  rw [← Array.foldl_toList, Array.toList_extract, hsz]
-  simp only [List.extract, Nat.sub_zero, List.drop_zero]
+theorem feedA_eq (cfg : QsConfig) (s : QsState) (b : ByteArray) : feedA cfg s b = feedT cfg s b.data.toList :=
+  (machine cfg).feedA_eq s b
 
 theorem parse_eq (cfg : QsConfig) (b : ByteArray) : parse cfg b = parseL cfg b.data.toList := by
   simp [parse, parseL, feedA_eq]
@@ -89,7 +63,7 @@ theorem step_errInv (cfg : QsConfig) (s : QsState) (c : UInt8) (h : ErrInv s) :
   obtain ⟨h1, h2⟩ := h
   unfold ErrInv step
   cases hp : s.phase with
-  | failed e0 => have := h2 e0 hp; simp only [hp]; exact ⟨by omega, fun e he => by cases he; omega⟩
+  | failed e0 => have := h2 e0 hp; simp only ; exact ⟨by omega, fun e he => by cases he; omega⟩
   | beforeField fs =>
     simp only [nameByte, finishField]
     repeat' split
@@ -129,7 +103,7 @@ theorem feed_errInv (cfg : QsConfig) (s : QsState) (l : Bytes) (h : ErrInv s) :
 
 theorem finish_failed {s : QsState} {e : QsError} (h : (finish s).phase = .failed e) :
     s.phase = .failed e := by
-  unfold finish at h; split at h <;> simp_all [finishField]
+  unfold finish at h; split at h <;> simp_all 
 
 /-- Totality: the parser consumes exactly `min(len, maxSize)` bytes, and an
 error's offset is one of them. -/
@@ -220,12 +194,12 @@ theorem feed_encodePair (cfg : QsConfig) (s : QsState) (fs : Bool) (p : Bytes ×
       obtain ⟨h1, h2, h3, h4⟩ := hm
       have hu : step cfg u Byte.EQ = { u with pos := u.pos + 1, phase := .fieldData } := by
         simp [step, h1, nameByte]
-      simp only [List.foldl_cons, List.foldl_nil, hu]
+      simp only [List.foldl_nil, hu]
       refine ⟨?_, ?_, ?_, ?_⟩ <;> simp_all
   rw [feed_append, ht1]
   have := feed_dataChars cfg t (quotePlusL p.2) ht2 (fun x hx => (hv x hx).1)
   rw [ht4] at this
-  simp only [Array.toList_empty, List.nil_append] at this
+  simp only [List.nil_append] at this
   exact ⟨this.1, this.2.2.1 ▸ ht3, this.2.1, this.2.2.2.trans ht5⟩
 
 theorem array_eq_of_toList {a : Array UInt8} {l : Bytes} (h : a.toList = l) : a = l.toArray := by
@@ -332,7 +306,7 @@ theorem feed_nonstrict (cfg : QsConfig) (hs : cfg.strict = false) (s : QsState) 
   | cons c cs ih => exact ih _ (step_nonstrict cfg hs s c h)
 
 /-- The non-strict parser never fails. -/
-theorem result_nonstrict (cfg : QsConfig) (hs : cfg.strict = false) (s : QsState)
+theorem result_nonstrict (cfg : QsConfig) (_hs : cfg.strict = false) (s : QsState)
     (h : ∀ e, s.phase ≠ .failed e) : ∀ e, result s ≠ .error e := by
   intro e he
   unfold result at he

@@ -46,7 +46,7 @@ theorem dlen_eq : cx.dlen = (D cx).length := by
 
 theorem dlen_ge : 5 ≤ cx.dlen := by
   have h := cx.boundary.h_valid.1
-  rw [dlen_eq]; simp [Boundary.delimL, Boundary.toList, ValidBoundary] at h ⊢; omega
+  rw [dlen_eq]; simp [Boundary.delimL, Boundary.toList] at h ⊢; omega
 
 theorem dAt_eq (k : Nat) (hk : k < cx.dlen) : cx.dAt k = (D cx)[k]'(by rw [← dlen_eq]; exact hk) := by
   simp [Ctx.dAt, Ctx.delim, Boundary.delim, Array.getD]
@@ -342,7 +342,7 @@ theorem feed_body (body : Bytes) : ∀ (s : MState) (k : Nat), s.phase = .partDa
         obtain ⟨k', h1, h2, h3, h4, h5⟩ := ih { s with pos := s.pos + 1, phase := .partData (.idx 1), data := s.data ++ cx.delim.extract 0 k } 1
           rfl (by have := dlen_ge cx; omega) (by rw [h1D]; simpa using hinf')
         refine ⟨k', h1, h2, ?_, h4, h5⟩
-        simp only [feed] at h3; rw [h3, h1D]; simp [delim_extract_toList, delim_toList]
+        simp only [feed] at h3; rw [h3, h1D]; simp [delim_toList]
       · have hs : step cx s c = { s with pos := s.pos + 1, phase := .partData (.idx 0), data := (s.data ++ cx.delim.extract 0 k).push c } := by
           simp [step, hp, matchByte, hc, restart, hcr]
         rw [hs]
@@ -350,7 +350,7 @@ theorem feed_body (body : Bytes) : ∀ (s : MState) (k : Nat), s.phase = .partDa
           rfl (by have := dlen_ge cx; omega)
           (by simp only [List.take_zero, List.nil_append]; exact fun h => hinf' (h.trans (List.suffix_cons _ _).isInfix))
         refine ⟨k', h1, h2, ?_, h4, h5⟩
-        simp only [feed] at h3; rw [h3]; simp [delim_extract_toList, delim_toList]
+        simp only [feed] at h3; rw [h3]; simp [delim_toList]
 
 /-- From a partial match of `j` bytes, the rest of the delimiter completes it. -/
 theorem feed_matchFrom (m : Nat) : ∀ (s : MState) (j : Nat), cx.dlen - j = m → j < cx.dlen →
@@ -401,7 +401,7 @@ theorem feed_delim (s : MState) (k : Nat) (hp : s.phase = .partData (.idx k)) (h
     have := feed_matchFrom cx _ { s with pos := s.pos + 1, phase := .partData (.idx 1), data := s.data ++ cx.delim.extract 0 k } 1 rfl (by omega) rfl
     simp only [feed] at this
     refine ⟨this.1, ?_, this.2.2⟩
-    rw [this.2.1]; simp [delim_extract_toList, delim_toList]
+    rw [this.2.1]; simp [delim_toList]
     rw [show Byte.CR :: (D cx).tail = D cx by simp [Boundary.delimL]]
 
 /-- After the delimiter, `CR LF` ends the part and begins the next. -/

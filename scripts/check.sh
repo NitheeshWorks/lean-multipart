@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # The whole local gate, in the order CI runs it. The verification gate
+# (scripts/Axioms.lean) checks every declaration on the compiled environment. The verification gate
 # (scripts/Axioms.lean) checks every declaration on the compiled environment. Exits on the first failure.
 #
 #   scripts/check.sh            # everything

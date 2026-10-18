@@ -95,15 +95,15 @@ theorem checkParts_ok (lim : FormLimits) (ps : List RawPart) :
         rcases checkPart_ok lim nf nd p sp a b hc with ⟨hf, ha, ha', hb⟩ | ⟨hf, ha, hb, hb', hs⟩
         · have := ih a b sps' c d ha' (by omega) hr
           refine ⟨?_, ?_, this.2.2.1, this.2.2.2.1, ?_⟩
-          · simp [List.filter_cons, hf]; omega
-          · simp [List.filter_cons, hf]; omega
+          · simp [hf]; omega
+          · simp [hf]; omega
           · intro x hx hxf; simp at hx; rcases hx with rfl | hx
             · simp_all
             · exact this.2.2.2.2 x hx hxf
         · have := ih a b sps' c d (by omega) hb' hr
           refine ⟨?_, ?_, this.2.2.1, this.2.2.2.1, ?_⟩
-          · simp [List.filter_cons, hf]; omega
-          · simp [List.filter_cons, hf]; omega
+          · simp [hf]; omega
+          · simp [hf]; omega
           · intro x hx hxf; simp at hx; rcases hx with rfl | hx
             · exact hs
             · exact this.2.2.2.2 x hx hxf
@@ -160,7 +160,7 @@ theorem take_append_room (d a b : Bytes) (m : Nat) :
     a.take (min a.length (m - d.length)) ++
       b.take (min b.length (m - (d.length + (a.take (min a.length (m - d.length))).length))) =
     (a ++ b).take (min (a ++ b).length (m - d.length)) := by
-  rw [Qs.take_min_length, List.length_take, Qs.take_min_length, Qs.take_min_length, List.take_append]
+  rw [Machine.take_min_length, List.length_take, Machine.take_min_length, Machine.take_min_length, List.take_append]
   by_cases h : a.length ≤ m - d.length
   · rw [List.take_of_length_le (l := a) h, Nat.min_eq_right h]
     congr 2; omega
@@ -182,17 +182,17 @@ theorem write_append (p : FormParser) (a b : ByteArray) : (p.write a).write b = 
         List.take_of_length_le (by simp)]
     | some m =>
       simp only [Array.toList_append, Array.toList_extract, List.extract, Nat.sub_zero, List.drop_zero,
-        ByteArray.data_append, Array.size_append, ByteArray.size, List.append_assoc, Array.length_toList]
+        ByteArray.data_append, Array.size_append, ByteArray.size, List.append_assoc]
       have := take_append_room data.toList a.data.toList b.data.toList m
       simp only [List.length_append, Array.length_toList, List.length_take] at this ⊢
       rw [← this, Array.size_extract, Nat.sub_zero]
-  | qs cfg st => simp [write, Qs.feedA_eq, bytes_append_toList, Qs.feedT_append]
-  | mp cfg cx st => simp [write, Mp.feedA_eq, bytes_append_toList, Mp.feedT_append]
+  | qs cfg st => simp [write, Qs.feedA_eq, Qs.feedT_append]
+  | mp cfg cx st => simp [write, Mp.feedA_eq, Mp.feedT_append]
 
 theorem write_empty (p : FormParser) : p.write ByteArray.empty = p := by
   cases p with
   | octet cfg fn data =>
-    simp only [write]; congr 1; apply Array.ext'; cases cfg.maxBodySize <;> simp [Array.toList_extract]
+    simp only [write]; congr 1; apply Array.ext'; cases cfg.maxBodySize <;> simp 
   | qs cfg st => simp [write, Qs.feedA_eq, Qs.feedT, Qs.feed]
   | mp cfg cx st => simp [write, Mp.feedA_eq, Mp.feedT, Mp.feed]
 

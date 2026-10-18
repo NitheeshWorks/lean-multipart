@@ -167,7 +167,7 @@ def finalize (p : FormParser) : Except FormError (List FormItem) :=
   | .mp cfg _ st => Form.ofMultipart cfg (Mp.result st)
 
 /-- The concatenation of chunks. -/
-def concat (cs : List ByteArray) : ByteArray := ⟨(cs.flatMap (·.data.toList)).toArray⟩
+abbrev concat (cs : List ByteArray) : ByteArray := concatChunks cs
 
 end FormParser
 

@@ -47,7 +47,7 @@ theorem unquotePlus_quotePlusB (b : ByteArray) : unquotePlus (quotePlus b) = b :
   rw [unquotePlus_toList, quotePlus_toList, unquotePlus_quotePlus]
 
 theorem urldecodeB_urlencodeB (ps : List (ByteArray × ByteArray)) : urldecodeB (urlencodeB ps) = ps := by
-  simp only [urldecodeB, urlencodeB, bytes_toList_toArray, Qs.urldecode_urlencode, List.map_map]
+  simp only [urldecodeB, urlencodeB, Qs.urldecode_urlencode, List.map_map]
   conv => rhs; rw [← List.map_id ps]
   apply List.map_congr_left
   intro p _

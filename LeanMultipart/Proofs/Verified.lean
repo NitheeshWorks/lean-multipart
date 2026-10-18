@@ -38,39 +38,35 @@ theorem theVerifiedPercent : VerifiedPercent where
   bytesRoundTrip := percentDecode_percentEncodeB
 
 /-- `application/x-www-form-urlencoded`: the round trip (plain and `_ext`),
-streaming equals whole-buffer for every chunking, totality with error
-localisation, and the callback parser runs the same machine. -/
+the streaming `QuerystringParser` gives the whole-buffer result for every
+split of the input, and totality with error localisation. -/
 structure VerifiedUrlencoded where
   roundTrip : Spec.UrlencodeRoundTrip urlencodeL urldecodeL
   roundTripExt : Spec.UrlencodeRoundTripExt urlencodeL urldecodeL
   bytesRoundTrip : ∀ ps, urldecodeB (urlencodeB ps) = ps
   streaming : ∀ cfg, Spec.QsStreamingAgrees cfg
   total : ∀ cfg, Spec.QsTotal cfg
-  callbackParser : ∀ cfg cs, Qs.forget (QsParser.writeAllSt cfg {} cs) = Qs.forget (Qs.feedT cfg {} cs.flatten)
 
 theorem theVerifiedUrlencoded : VerifiedUrlencoded where
   roundTrip := Qs.urldecode_urlencode
   roundTripExt := Qs.urlencode_urldecode_ext
   bytesRoundTrip := urldecodeB_urlencodeB
-  streaming := Qs.parse_chunks
+  streaming := QuerystringParser.parseChunks_eq
   total := Qs.parse_total
-  callbackParser := QsParser.st_writeAll
 
-/-- `multipart/form-data`: the round trip on any epilogue, streaming equals
-whole-buffer, totality, the callback parser runs the same machine, and a
-parsed boundary satisfies its refinement. -/
+/-- `multipart/form-data`: the round trip on any epilogue, the streaming
+`MultipartParser` gives the whole-buffer parts for every split of the
+input, totality, and a parsed boundary satisfies its refinement. -/
 structure VerifiedMultipart where
   roundTrip : ∀ cx, Spec.MultipartRoundTrip cx
   streaming : ∀ cx, Spec.MpStreamingAgrees cx
   total : ∀ cx, Spec.MpTotal cx
-  callbackParser : ∀ cx cs, Mp.forget (MultipartParser.writeAllSt cx {} cs) = Mp.forget (Mp.feedT cx {} cs.flatten)
   boundaryValid : ∀ ct b, API.parseBoundary ct = .ok b → ValidBoundary b.1
 
 theorem theVerifiedMultipart : VerifiedMultipart where
   roundTrip := fun cx ps epi hw hf => Mp.multipart_parse_print_ext cx ps epi hw hf
-  streaming := Mp.parse_chunks
+  streaming := MultipartParser.parseChunks_eq
   total := Mp.parse_total
-  callbackParser := MultipartParser.st_writeAll
   boundaryValid := API.parseBoundary_valid
 
 /-- Forms: `FormParser` fed any chunking equals one write, and Starlette's

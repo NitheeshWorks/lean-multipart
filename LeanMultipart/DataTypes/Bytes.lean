@@ -81,6 +81,9 @@ def ascii (s : String) : Bytes := s.toList.map (fun c => c.toNat.toUInt8)
 /-- ASCII lower-casing of a byte string. -/
 def lowerAscii (b : ByteArray) : ByteArray := ⟨b.data.map Byte.toLowerAscii⟩
 
+/-- The concatenation of chunks. -/
+def concatChunks (cs : List ByteArray) : ByteArray := ⟨(cs.flatMap (·.data.toList)).toArray⟩
+
 /-- Latin-1 decoding: every byte is the code point of the same value. Total. -/
 def latin1Decode (b : ByteArray) : String :=
   String.ofList (b.data.toList.map (fun c => Char.ofNat c.toNat))

@@ -1,4 +1,4 @@
-import LeanMultipart.RepoImpl.Form
+import LeanMultipart.RepoImpl
 
 /-!
 # Specifications: percent-encoding and urlencoded forms
@@ -21,10 +21,10 @@ def UrlencodeRoundTrip (enc : List (Bytes × Bytes) → Bytes) (dec : Bytes → 
 def UrlencodeRoundTripExt (enc : List (Bytes × Bytes) → Bytes) (dec : Bytes → List (Bytes × Bytes)) : Prop :=
   ∀ ps rest, dec (enc ps ++ [Byte.AMP] ++ rest) = ps ++ dec rest
 
-/-- The streaming querystring parser fed any chunking agrees with the
-whole-buffer parser. -/
+/-- The streaming `QuerystringParser`, fed any split of the input and its
+callbacks collected, gives the whole-buffer result. -/
 def QsStreamingAgrees (cfg : QsConfig) : Prop :=
-  ∀ cs : List Bytes, Qs.result (Qs.feedChunks cfg {} cs) = Qs.parseL cfg cs.flatten
+  ∀ chunks : List ByteArray, QuerystringParser.parseChunks cfg chunks = Qs.parse cfg (concatChunks chunks)
 
 /-- The querystring parser is total: it processes `min(len, maxSize)` bytes
 and reports errors inside them. -/

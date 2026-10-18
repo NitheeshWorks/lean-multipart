@@ -224,10 +224,10 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
     run := qsIs {} ["foo=bar&blank&another=asdf"] [("foo", "bar"), ("blank", ""), ("another", "asdf")] },
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_no_callbacks"
     name := "querystring write returns length",
-    run := pure (match QsParser.new.write (bs "foo=bar") with | .ok (_, _, n) => n == 7 | .error _ => false) },
+    run := pure (match (QuerystringParser.new).write (bs "foo=bar") with | .ok (_, _, n) => n == 7 | .error _ => false) },
   { upstream := "tests/test_multipart.py::test_parser_states_remain_enum_members"
     name := "querystring ends in field data",
-    run := pure (match QsParser.new.write (bs "field=value") with | .ok (p, _, _) => p.st.phase == .fieldData | .error _ => false) },
+    run := pure (match (QuerystringParser.new).write (bs "field=value") with | .ok (p, _, _) => p.st.phase == .fieldData | .error _ => false) },
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_invalid_max_size"
     name := "max_size below 1 cannot be configured",
     run := pure ((mpMax 0).maxSize.isNone) },

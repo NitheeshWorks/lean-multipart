@@ -89,7 +89,7 @@ def assembleQs (evs : List QsEvent) : List (Bytes × Bytes) := Id.run do
 
 /-- Run the callback querystring parser over chunks. -/
 def runQs (cfg : QsConfig) (chunks : List Bytes) : Except QsError (List QsEvent) := Id.run do
-  let mut p := QsParser.new cfg
+  let mut p : QuerystringParser := { cfg }
   let mut evs : Array QsEvent := #[]
   for c in chunks do
     match p.write (toBA c) with
@@ -213,7 +213,7 @@ def properties : List Property := [
         ps := ps.push (s1, s2)
       let back := urldecodeStr (urlencodeStr ps.toList)
       return (if back == ps.toList then none else some s!"{ps}", r) },
-  { name := "tested QsParser events = whole-buffer fields (random bodies, random chunking)"
+  { name := "smoke QuerystringParser.parseChunks_eq: events = whole-buffer fields (random bodies, random chunking)"
     check := fun r => Id.run do
       let (body, r) := genFrom (asciiArr "ab=&;%+") 30 r
       let (chunks, r) := genChunks body r
@@ -222,7 +222,7 @@ def properties : List Property := [
         | .ok fs, .ok evs => assembleQs evs == fs.map (fun f => (f.1.data.toList, f.2.data.toList))
         | _, _ => false
       return (bif ok then none else some s!"{showB body} chunks {chunks}", r) },
-  { name := "tested QsParser strict errors = whole-buffer errors (random chunking)"
+  { name := "smoke QuerystringParser.parseChunks_eq: strict errors = whole-buffer errors (random chunking)"
     check := fun r => Id.run do
       let (body, r) := genFrom (asciiArr "ab=&") 20 r
       let (chunks, r) := genChunks body r
@@ -240,7 +240,7 @@ def properties : List Property := [
       let res := Mp.parse { boundary := boundaryB } body
       let ok : Bool := res.ended && res.error.isNone && res.parts.map rawView == ps.map rawView
       return (bif ok then none else some s!"{ps.map rawView}", r) },
-  { name := "tested MultipartParser events = whole-buffer parts (printed messages, random chunking)"
+  { name := "smoke MultipartParser.parseChunks_eq: events = whole-buffer parts (printed messages, random chunking)"
     check := fun r => Id.run do
       let (ps, r) := genParts shortB r
       let body := (Mp.print shortB ps).data.toList
@@ -250,7 +250,7 @@ def properties : List Property := [
         | .ok evs => assembleMp evs == whole.parts.map rawView
         | .error _ => false
       return (bif ok then none else some s!"{showB body} chunks {chunks}", r) },
-  { name := "tested MultipartParser events = whole-buffer parts (fuzzed messages, random chunking)"
+  { name := "smoke MultipartParser.parseChunks_eq: events = whole-buffer parts (fuzzed messages, random chunking)"
     check := fun r => Id.run do
       let (ps, r) := genParts shortB r
       let body := (Mp.print shortB ps).data.toList
@@ -355,7 +355,7 @@ def bigChecks : IO Bool := do
   let n := 2000000
   let body : ByteArray := ⟨(ascii "a=").toArray ++ Array.replicate n 98⟩
   let t0 ← IO.monoMsNow
-  let ok1 := match (QsParser.new).write body with
+  let ok1 := match (QuerystringParser.new).write body with
     | .ok (p, evs, k) => k == body.size && (match p.finalize with | .ok _ => true | .error _ => false) && evs.size ≥ 2
     | .error _ => false
   let t1 ← IO.monoMsNow
@@ -367,7 +367,7 @@ def bigChecks : IO Bool := do
     | .ok (_, evs, _) => evs.size ≥ 3
     | .error _ => false
   let t3 ← IO.monoMsNow
-  IO.println s!"big    QsParser 2 MB value {t1 - t0} ms, percent codec 8 MB {t2 - t1} ms, MultipartParser 8 MB part {t3 - t2} ms"
+  IO.println s!"big    QuerystringParser 2 MB value {t1 - t0} ms, percent codec 8 MB {t2 - t1} ms, MultipartParser 8 MB part {t3 - t2} ms"
   return ok1 && ok2 && ok3
 
 def main (args : List String) : IO UInt32 := do

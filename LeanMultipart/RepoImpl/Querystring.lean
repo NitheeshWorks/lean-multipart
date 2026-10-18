@@ -1,4 +1,5 @@
 import LeanMultipart.DataTypes.Querystring
+import LeanMultipart.Theory.Machine
 import LeanMultipart.RepoImpl.Percent
 
 /-!
@@ -7,7 +8,7 @@ import LeanMultipart.RepoImpl.Percent
 Upstream's `QuerystringParser`, one byte at a time. `step` is the whole
 machine; feeding a chunk is `List.foldl step`, so feeding chunks one after
 another is feeding their concatenation (`Qs.feed_append` in
-`Proofs/Querystring.lean`). The callback-style parser `QsParser` threads the
+`Proofs/Querystring.lean`). The callback-style parser `QuerystringParser` threads the
 same states and derives upstream's callbacks from each transition.
 
 Semantics, as upstream: fields are separated by `&` only (`;` is data,
@@ -53,6 +54,10 @@ def step (cfg : QsConfig) (s : QsState) (c : UInt8) : QsState :=
     if c == Byte.AMP then { finishField s with phase := .beforeField true }
     else { s with value := s.value.push c }
 
+/-- The machine: `step`, the byte counter, and the `maxSize` limit. The
+general chunking theorems of `Theory/Machine.lean` apply to it. -/
+def machine (cfg : QsConfig) : Machine QsState := { step := step cfg, pos := QsState.pos, limit := cfg.maxSize }
+
 /-- Feed bytes (no truncation). -/
 def feed (cfg : QsConfig) (s : QsState) (l : Bytes) : QsState := l.foldl (step cfg) s
 
@@ -66,10 +71,8 @@ def room (cfg : QsConfig) (s : QsState) (n : Nat) : Nat :=
 def feedT (cfg : QsConfig) (s : QsState) (l : Bytes) : QsState :=
   feed cfg s (l.take (room cfg s l.length))
 
-/-- Feeding the chunks of a list one after another, as a `QsParser` does. -/
-def feedChunks (cfg : QsConfig) (s : QsState) : List Bytes → QsState
-  | [] => s
-  | c :: cs => feedChunks cfg (feedT cfg s c) cs
+/-- Feeding the chunks of a list one after another, as a `QuerystringParser` does. -/
+def feedChunks (cfg : QsConfig) (s : QsState) (cs : List Bytes) : QsState := (machine cfg).feedChunks s cs
 
 /-- The number of bytes the whole-buffer parser processes. -/
 def processed (cfg : QsConfig) (l : Bytes) : Nat := (feedT cfg {} l).pos

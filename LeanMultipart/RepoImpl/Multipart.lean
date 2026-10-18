@@ -1,4 +1,5 @@
 import LeanMultipart.DataTypes.Multipart
+import LeanMultipart.Theory.Machine
 
 /-!
 # The multipart state machine
@@ -136,6 +137,10 @@ def step (cx : Ctx) (s : MState) (c : UInt8) : MState :=
     else fail s .noLFAfterHeaders p
   | .partData m => matchByte cx m s c
 
+/-- The machine: `step`, the byte counter, and the `maxSize` limit. The
+general chunking theorems of `Theory/Machine.lean` apply to it. -/
+def machine (cx : Ctx) : Machine MState := { step := step cx, pos := MState.pos, limit := cx.cfg.maxSize }
+
 /-- Feed bytes (no truncation). -/
 def feed (cx : Ctx) (s : MState) (l : Bytes) : MState := l.foldl (step cx) s
 
@@ -150,9 +155,7 @@ def feedT (cx : Ctx) (s : MState) (l : Bytes) : MState :=
   feed cx s (l.take (room cx s l.length))
 
 /-- Feeding chunks one after another, as `MultipartParser.write` does. -/
-def feedChunks (cx : Ctx) (s : MState) : List Bytes → MState
-  | [] => s
-  | c :: cs => feedChunks cx (feedT cx s c) cs
+def feedChunks (cx : Ctx) (s : MState) (cs : List Bytes) : MState := (machine cx).feedChunks s cs
 
 /-- Read the outcome off a state. -/
 def result (s : MState) : MultipartResult where
