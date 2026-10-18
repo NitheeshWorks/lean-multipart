@@ -312,6 +312,29 @@ def properties : List Property := [
             sp.1.all (fun p => p.isFile || decide (p.data.size ≤ 5))
         | .error _ => true
       return (bif ok then none else some s!"{n}", r) },
+  { name := "smoke Starlette streaming parsers: any chunking = one write (finalize_chunks)"
+    check := fun r => Id.run do
+      let (ps, r) := genParts shortB r
+      let body := (Mp.print shortB ps).data.toList
+      let (chunks, r) := genChunks body r
+      let lim : FormLimits := { maxFields := 2, maxFiles := 2, maxPartSize := 10 }
+      let p := Starlette.MultipartFormParser.new shortB lim
+      let a := (chunks.foldl (fun p c => p.write (toBA c)) p).finalize
+      let b := (p.write (toBA body)).finalize
+      let ok : Bool := match a, b with
+        | .ok x, .ok y => x.length == y.length
+        | .error e1, .error e2 => e1 == e2
+        | _, _ => false
+      let (qs, r) := genFrom (asciiArr "ab=&") 30 r
+      let (qchunks, r) := genChunks qs r
+      let q : Starlette.UrlencodedParser := { lim := { maxFields := 3, maxPartSize := 4 } }
+      let qa := (qchunks.foldl (fun p c => p.write (toBA c)) q).finalize
+      let qb := (q.write (toBA qs)).finalize
+      let ok2 : Bool := match qa, qb with
+        | .ok x, .ok y => x.length == y.length
+        | .error e1, .error e2 => e1 == e2
+        | _, _ => false
+      return (bif ok && ok2 then none else some (showB body), r) },
   { name := "tested base64 decoder inverts standard encoding (random bytes)"
     check := fun r => Id.run do
       let (l, r) := genFrom allBytes 40 r

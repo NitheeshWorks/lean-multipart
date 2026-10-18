@@ -28,3 +28,8 @@ roots = ["tests.Fixtures"]
 [[lean_exe]]
 name = "quickstart"
 root = "examples.Quickstart"
+
+# Native time and memory checks: `scripts/bench.sh`.
+[[lean_exe]]
+name = "bench"
+root = "tests.Bench"

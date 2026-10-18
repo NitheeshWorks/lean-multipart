@@ -71,11 +71,15 @@ structure VerifiedForm where
     Spec.UrlencodedWithinLimits lim fs
   multipartLimits : ∀ lim ct body ps, Starlette.parseMultipartRaw lim ct body = .ok ps →
     Spec.MultipartWithinLimits lim ps
+  starletteStreaming : Spec.StarletteStreamingAgrees
+  starletteBounded : Spec.StarletteBounded
 
 theorem theVerifiedForm : VerifiedForm where
   streaming := FormParser.write_chunks
   dispositionRoundTrip := dispositionParams_formPart
   urlencodedLimits := Starlette.parseUrlencodedRaw_ok
   multipartLimits := Starlette.parseMultipartRaw_ok
+  starletteStreaming := ⟨Starlette.UrlencodedParser.finalize_chunks, Starlette.MultipartFormParser.finalize_chunks⟩
+  starletteBounded := ⟨Starlette.urlencoded_bounded, Starlette.multipart_bounded⟩
 
 end LeanMultipart

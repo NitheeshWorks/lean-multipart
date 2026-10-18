@@ -131,6 +131,17 @@ def parseL (l : Bytes) : Bytes × List (Bytes × Bytes) :=
 def lookup (opts : List (Bytes × Bytes)) (k : Bytes) : Option Bytes :=
   (opts.find? (fun p => p.1 == k)).map (·.2)
 
+/-- The longest header value parsed, in bytes. Upstream has no bound; the
+list-based parser costs tens of bytes per input byte, so values are bounded
+the way servers bound header blocks (h11 and uvicorn use 16 KiB by
+default). Multipart part headers are already bounded by `max_header_size`. -/
+def maxLength : Nat := 16384
+
+/-- `parseL` on a byte array, for values up to `maxLength` bytes; a longer
+value has no main value and no parameters. -/
+def parseB (b : ByteArray) : Bytes × List (Bytes × Bytes) :=
+  if b.size ≤ maxLength then parseL b.data.toList else ([], [])
+
 end Options
 
 /-- The parameters of a header value, as upstream's `dict`: in first-seen
@@ -144,7 +155,8 @@ def Params.get (p : Params) (key : String) : Option ByteArray :=
   (p.entries.find? (fun e => e.1.data.toList == ascii key)).map (·.2)
 
 /-- Upstream's `parse_options_header(value)`: the main value and its
-parameters.
+parameters. Values longer than `Options.maxLength` (16 KiB) give no
+parameters (a documented deviation; upstream parses any length).
 
 ```lean
 let (ctype, params) := parseOptionsHeader "multipart/form-data; boundary=xyz".toUTF8
@@ -152,7 +164,7 @@ params.get "boundary"   -- some "xyz"
 ```
 -/
 def parseOptionsHeader (value : ByteArray) : ByteArray × Params :=
-  let (v, opts) := Options.parseL value.data.toList
+  let (v, opts) := Options.parseB value
   (⟨v.toArray⟩, ⟨opts.map (fun p => (⟨p.1.toArray⟩, ⟨p.2.toArray⟩))⟩)
 
 end LeanMultipart

@@ -74,23 +74,23 @@ theorem quotePlusL_no_sep (l : Bytes) : ∀ c ∈ quotePlusL l, c ≠ Byte.AMP �
 
 /-! ## The array folds equal the list forms -/
 
-theorem foldl_encStep (l : Bytes) (acc : Array UInt8) :
-    (l.foldl encStep acc).toList = acc.toList ++ percentEncodeL l := by
+theorem foldl_encStep (l : Bytes) (acc : ByteArray) :
+    (l.foldl encStep acc).data.toList = acc.data.toList ++ percentEncodeL l := by
   induction l generalizing acc with
   | nil => simp [percentEncodeL]
   | cons c cs ih =>
     simp only [List.foldl_cons, ih, percentEncodeL, encStep]
-    split <;> simp
+    split <;> simp [pctTriple]
 
-theorem foldl_encPlusStep (l : Bytes) (acc : Array UInt8) :
-    (l.foldl encPlusStep acc).toList = acc.toList ++ quotePlusL l := by
+theorem foldl_encPlusStep (l : Bytes) (acc : ByteArray) :
+    (l.foldl encPlusStep acc).data.toList = acc.data.toList ++ quotePlusL l := by
   induction l generalizing acc with
   | nil => simp [quotePlusL]
   | cons c cs ih =>
     simp only [List.foldl_cons, ih, quotePlusL, encPlusStep]
     split
     · simp_all
-    · split <;> simp_all
+    · split <;> simp_all [pctTriple]
 
 /-- The bytes a pending state stands for. -/
 def pendingBytes : DecPending → Bytes
@@ -118,8 +118,8 @@ theorem percentDecodeL_pct_hex_nonhex (a c : UInt8) (x : Nat) (l : Bytes) (ha : 
   simp [percentDecodeL, hc, ha]
   exact percentDecodeL_cons_of_ne (hex_ne_percent ha) _
 
-theorem foldl_decStep (l : Bytes) : ∀ (acc : Array UInt8) (p : DecPending), PendingOK p →
-    (decFinish (l.foldl decStep (acc, p))).toList = acc.toList ++ percentDecodeL (pendingBytes p ++ l) := by
+theorem foldl_decStep (l : Bytes) : ∀ (acc : ByteArray) (p : DecPending), PendingOK p →
+    (decFinish (l.foldl decStep (acc, p))).data.toList = acc.data.toList ++ percentDecodeL (pendingBytes p ++ l) := by
   induction l with
   | nil =>
     intro acc p hp
@@ -178,14 +178,14 @@ per-byte encoding. One `Reads` lemma per byte gives the round trip by
 `Reads.flatMap`, on any continuation. -/
 
 /-- The decoder as a machine (it has no input limit). -/
-def decMachine : Machine (Array UInt8 × DecPending) := { step := decStep, pos := fun s => s.1.size, limit := none }
+def decMachine : Machine (ByteArray × DecPending) := { step := decStep, pos := fun s => s.1.size, limit := none }
 
 /-- The `unquote_plus` decoder: `+` is a space, then `unquote_to_bytes`. -/
-def decPlusMachine : Machine (Array UInt8 × DecPending) :=
+def decPlusMachine : Machine (ByteArray × DecPending) :=
   { step := fun s c => decStep s (plusToSpace c), pos := fun s => s.1.size, limit := none }
 
 /-- Nothing held back, and `acc` decoded so far. -/
-def Decoded (acc : Bytes) (s : Array UInt8 × DecPending) : Prop := s.2 = .none ∧ s.1.toList = acc
+def Decoded (acc : Bytes) (s : ByteArray × DecPending) : Prop := s.2 = .none ∧ s.1.data.toList = acc
 
 /-- One byte of `quote`. -/
 def encByte (c : UInt8) : Bytes := if Byte.isUnreserved c then [c] else pctTriple c
@@ -211,7 +211,7 @@ theorem plusToSpace_hexDigit (n : Nat) : plusToSpace (hexDigit n) = hexDigit n :
   have h : ∀ k : Fin 16, plusToSpace (hexDigit k.val) = hexDigit k.val := by decide
   exact h ⟨n % 16, Nat.mod_lt _ (by decide)⟩
 
-theorem foldl_decStep_triple (a : Array UInt8) (c : UInt8) :
+theorem foldl_decStep_triple (a : ByteArray) (c : UInt8) :
     (pctTriple c).foldl decStep (a, .none) = (a.push c, .none) := by
   simp only [pctTriple, List.foldl_cons, List.foldl_nil, decStep, beq_self_eq_true, ite_true,
     hexVal?_hexDigit]
@@ -243,7 +243,7 @@ theorem reads_encByte (c : UInt8) (acc : Bytes) :
   · exact reads_pctTriple c acc
 
 /-- The `+` decoder is the plain decoder after `+` → space. -/
-theorem decPlus_feed (s : Array UInt8 × DecPending) (l : Bytes) :
+theorem decPlus_feed (s : ByteArray × DecPending) (l : Bytes) :
     decPlusMachine.feed s l = decMachine.feed s (l.map plusToSpace) := by
   simp only [Machine.feed, decPlusMachine, decMachine]
   exact foldl_map_eq decStep plusToSpace l s
@@ -269,8 +269,8 @@ theorem reads_encPlusByte (c : UInt8) (acc : Bytes) :
     · rw [map_plusToSpace_pctTriple]; exact reads_pctTriple c acc s hs
 
 /-- `percentDecodeL` as the decoder machine. -/
-theorem percentDecodeL_eq (l : Bytes) : percentDecodeL l = (decFinish (decMachine.feed (#[], .none) l)).toList := by
-  have := foldl_decStep l #[] .none trivial
+theorem percentDecodeL_eq (l : Bytes) : percentDecodeL l = (decFinish (decMachine.feed (ByteArray.empty, .none) l)).data.toList := by
+  have := foldl_decStep l ByteArray.empty .none trivial
   simp only [pendingBytes, List.nil_append] at this
   exact this.symm
 
@@ -278,16 +278,16 @@ theorem percentDecodeL_eq (l : Bytes) : percentDecodeL l = (decFinish (decMachin
 `Reads.flatMap` with `reads_encByte`. -/
 theorem percentDecode_percentEncode_ext (l rest : Bytes) :
     percentDecodeL (percentEncodeL l ++ rest) = l ++ percentDecodeL rest := by
-  have hr := Reads.flatMap encByte l (fun acc x _ => reads_encByte x acc) [] (#[], .none) ⟨rfl, rfl⟩
+  have hr := Reads.flatMap encByte l (fun acc x _ => reads_encByte x acc) [] (ByteArray.empty, .none) ⟨rfl, rfl⟩
   rw [← percentEncodeL_flatMap] at hr
   rw [percentDecodeL_eq, decMachine.feed_append]
-  generalize decMachine.feed (#[], .none) (percentEncodeL l) = st at hr
+  generalize decMachine.feed (ByteArray.empty, .none) (percentEncodeL l) = st at hr
   obtain ⟨a, p⟩ := st
   obtain ⟨h1, h2⟩ := hr
   simp only at h1 h2; subst h1
   have := foldl_decStep rest a .none trivial
   simp only [pendingBytes, List.nil_append] at this
-  show (decFinish (rest.foldl decStep (a, .none))).toList = _
+  show (decFinish (rest.foldl decStep (a, .none))).data.toList = _
   rw [this, h2]; rfl
 
 theorem percentDecode_percentEncode (l : Bytes) : percentDecodeL (percentEncodeL l) = l := by
@@ -297,17 +297,17 @@ theorem percentDecode_percentEncode (l : Bytes) : percentDecodeL (percentEncodeL
 `Reads.flatMap` with `reads_encPlusByte`. -/
 theorem unquotePlus_quotePlus_ext (l rest : Bytes) :
     unquotePlusL (quotePlusL l ++ rest) = l ++ unquotePlusL rest := by
-  have hr := Reads.flatMap encPlusByte l (fun acc x _ => reads_encPlusByte x acc) [] (#[], .none) ⟨rfl, rfl⟩
+  have hr := Reads.flatMap encPlusByte l (fun acc x _ => reads_encPlusByte x acc) [] (ByteArray.empty, .none) ⟨rfl, rfl⟩
   rw [← quotePlusL_flatMap, decPlus_feed] at hr
   simp only [unquotePlusL, List.map_append]
   rw [percentDecodeL_eq, decMachine.feed_append]
-  generalize decMachine.feed (#[], .none) ((quotePlusL l).map plusToSpace) = st at hr
+  generalize decMachine.feed (ByteArray.empty, .none) ((quotePlusL l).map plusToSpace) = st at hr
   obtain ⟨a, p⟩ := st
   obtain ⟨h1, h2⟩ := hr
   simp only at h1 h2; subst h1
   have := foldl_decStep (rest.map plusToSpace) a .none trivial
   simp only [pendingBytes, List.nil_append] at this
-  show (decFinish ((rest.map plusToSpace).foldl decStep (a, .none))).toList = _
+  show (decFinish ((rest.map plusToSpace).foldl decStep (a, .none))).data.toList = _
   rw [this, h2]; rfl
 
 theorem unquotePlus_quotePlus (l : Bytes) : unquotePlusL (quotePlusL l) = l := by

@@ -26,7 +26,7 @@ namespace Qs
 
 /-- Close the current field. -/
 def finishField (s : QsState) : QsState :=
-  { s with fields := s.fields.push (⟨s.name⟩, ⟨s.value⟩), name := #[], value := #[] }
+  { s with fields := s.fields.push (s.name, s.value), name := ByteArray.empty, value := ByteArray.empty }
 
 /-- A byte of a field name (or the `=` / `&` that ends it). `p` is the
 byte's offset. -/
@@ -48,7 +48,7 @@ def step (cfg : QsConfig) (s : QsState) (c : UInt8) : QsState :=
       if fs then
         if cfg.strictParsing then { s with phase := .failed ⟨.duplicateAmpersand, p⟩ } else s
       else { s with phase := .beforeField true }
-    else nameByte cfg { s with nameStart := p, name := #[], value := #[] } c
+    else nameByte cfg { s with nameStart := p, name := ByteArray.empty, value := ByteArray.empty } c
   | .fieldName => nameByte cfg s c
   | .fieldData =>
     if c == Byte.AMP then { finishField s with phase := .beforeField true }
@@ -96,7 +96,7 @@ def parseL (cfg : QsConfig) (l : Bytes) : Except QsError (List QsField) :=
 /-- Feed a byte array, truncated at `maxSize`, as an array fold (no
 intermediate list). Equal to `feedT` on the list (`Qs.feedA_eq`). -/
 def feedA (cfg : QsConfig) (s : QsState) (b : ByteArray) : QsState :=
-  (b.data.extract 0 (room cfg s b.size)).foldl (step cfg) s
+  (machine cfg).feedA s b
 
 /-- The whole-buffer parser. Equal to `parseL` on the bytes (`Qs.parse_eq`). -/
 def parse (cfg : QsConfig) (b : ByteArray) : Except QsError (List QsField) :=

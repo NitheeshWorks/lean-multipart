@@ -16,17 +16,17 @@ namespace LeanMultipart
   cases b; simp
 
 theorem percentEncode_toList (b : ByteArray) : (percentEncode b).data.toList = percentEncodeL b.data.toList := by
-  simp only [percentEncode, ← Array.foldl_toList, foldl_encStep]; rfl
+  simp only [percentEncode, bytesFold_full, foldl_encStep]; rfl
 
 theorem percentDecode_toList (b : ByteArray) : (percentDecode b).data.toList = percentDecodeL b.data.toList := by
-  simp only [percentDecode, ← Array.foldl_toList]
+  simp only [percentDecode, bytesFold_full]
   rw [foldl_decStep _ _ .none trivial]; rfl
 
 theorem quotePlus_toList (b : ByteArray) : (quotePlus b).data.toList = quotePlusL b.data.toList := by
-  simp only [quotePlus, ← Array.foldl_toList, foldl_encPlusStep]; rfl
+  simp only [quotePlus, bytesFold_full, foldl_encPlusStep]; rfl
 
 theorem unquotePlus_toList (b : ByteArray) : (unquotePlus b).data.toList = unquotePlusL b.data.toList := by
-  simp only [unquotePlus, ← Array.foldl_toList, unquotePlusL]
+  simp only [unquotePlus, bytesFold_full, unquotePlusL]
   rw [foldl_map_eq decStep plusToSpace, foldl_decStep _ _ .none trivial]; rfl
 
 theorem byteArray_ext_toList {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b :=

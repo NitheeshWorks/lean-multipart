@@ -33,7 +33,7 @@ def headerLookup (hs : List (ByteArray × ByteArray)) (name : Bytes) : Option By
 /-- The `name` and `filename` parameters of a part's `Content-Disposition`. -/
 def dispositionParams (hs : List (ByteArray × ByteArray)) : Option Bytes × Option Bytes :=
   let cd := (headerLookup hs (ascii "content-disposition")).getD ByteArray.empty
-  let (_, opts) := Options.parseL cd.data.toList
+  let (_, opts) := Options.parseB cd
   (Options.lookup opts (ascii "name"), Options.lookup opts (ascii "filename"))
 
 def toDecodeKind : DecodeError → DecodeErrorKind
@@ -206,7 +206,7 @@ def Headers.get (h : Headers) (k : String) : Option ByteArray := (h.find? (·.1 
 def createFormParser (headers : Headers) (config : FormParserConfig := {})
     (fileName : Option ByteArray := none) : Except FormError FormParser := do
   let some ct := headers.get "Content-Type" | .error .noContentType
-  let (ctype, opts) := Options.parseL ct.data.toList
+  let (ctype, opts) := Options.parseB ct
   let boundary := (Options.lookup opts (ascii "boundary")).map (fun b => ByteArray.mk b.toArray)
   let kind ← FormKind.select (latin1Decode ⟨ctype.toArray⟩) boundary
   pure (FormParser.ofKind config kind fileName)
@@ -263,13 +263,12 @@ def formPart (name : ByteArray) (filename : Option ByteArray) (contentType : Opt
 
 namespace Starlette
 
-/-- Starlette's `FormParser` over the raw fields, in order. -/
-def checkFields (lim : FormLimits) : Nat → List QsField → Except LimitError (List QsField)
-  | _, [] => .ok []
-  | n, f :: fs =>
-    if lim.maxPartSize < f.1.size + f.2.size then .error (.fieldTooLarge lim.maxPartSize)
-    else if lim.maxFields < n + 1 then .error (.tooManyFields lim.maxFields)
-    else (checkFields lim (n + 1) fs).map (f :: ·)
+/-! Starlette's form parsers enforce `max_fields`, `max_files` and
+`max_part_size` from inside the parser callbacks, so a request is rejected
+at the byte where it crosses a limit, before the rest is read. Here the
+checks are byte machines wrapping the querystring and multipart machines:
+the first excess stops the machine with the `LimitError` Starlette raises,
+and from then on only the byte count moves. -/
 
 /-- Starlette's view of a raw part: lower-cased header names, the last
 `Content-Disposition`, its `name` and `filename`. -/
@@ -279,47 +278,132 @@ def partOf (p : RawPart) : Except LimitError StarlettePart := do
   let some name := name? | .error .missingName
   pure { name := ⟨name.toArray⟩, filename := file?.map (fun f => ⟨f.toArray⟩), headers := hs, data := p.body }
 
-/-- Starlette's per-part checks, in order; `nf` / `nd` count files and
-fields so far. `last` marks the part in progress, whose data is not
-reported (only checked). -/
-def checkPart (lim : FormLimits) (nf nd : Nat) (p : RawPart) :
-    Except LimitError (StarlettePart × Nat × Nat) := do
-  let sp ← partOf p
-  if sp.isFile then
-    if lim.maxFiles < nf + 1 then .error (.tooManyFiles lim.maxFiles)
-    else pure (sp, nf + 1, nd)
-  else
-    if lim.maxFields < nd + 1 then .error (.tooManyFields lim.maxFields)
-    else if lim.maxPartSize < p.body.size then .error (.partTooLarge lim.maxPartSize)
-    else pure (sp, nf, nd + 1)
+/-! ### `application/x-www-form-urlencoded` -/
 
-def checkParts (lim : FormLimits) : Nat → Nat → List RawPart → Except LimitError (List StarlettePart × Nat × Nat)
-  | nf, nd, [] => .ok ([], nf, nd)
-  | nf, nd, p :: ps => do
-    let (sp, nf', nd') ← checkPart lim nf nd p
-    let (sps, nf'', nd'') ← checkParts lim nf' nd' ps
-    pure (sp :: sps, nf'', nd'')
+/-- The querystring machine and the first limit error. -/
+structure UrlState where
+  inner : QsState := {}
+  err : Option LimitError := none
+  deriving Inhabited
 
-/-- Starlette's `MultiPartParser` over a multipart result. -/
-def ofMultipart (lim : FormLimits) (r : MultipartResult) : Except LimitError (List StarlettePart) := do
-  let (sps, nf, nd) ← checkParts lim 0 0 r.parts
-  if let some p := r.current then
-    let _ ← checkPart lim nf nd p
-  if r.error.isSome then .error .invalidMultipart
-  pure sps
+/-- One byte: step the querystring machine, then check the field being read
+(`max_part_size` on its name and value) and the number of fields
+(`max_fields`, checked when a field ends). -/
+def urlStep (lim : FormLimits) (s : UrlState) (c : UInt8) : UrlState :=
+  match s.err with
+  | some _ => s
+  | none =>
+    let i' := Qs.step {} s.inner c
+    if lim.maxPartSize < i'.name.size + i'.value.size then { inner := i', err := some (.fieldTooLarge lim.maxPartSize) }
+    else if lim.maxFields < i'.fields.size then { inner := i', err := some (.tooManyFields lim.maxFields) }
+    else { inner := i', err := none }
 
-/-- Starlette's `FormParser.parse`: the raw (still percent-encoded) fields,
-in order, under the limits. -/
+def urlMachine (lim : FormLimits) : Machine UrlState := { step := urlStep lim, pos := (·.inner.pos), limit := none }
+
+/-- After a limit error nothing more is read. -/
+def urlHalted (s : UrlState) : Bool := s.err.isSome
+
+/-- The end of the body: a field in progress ends (and is counted). -/
+def urlResult (lim : FormLimits) (s : UrlState) : Except LimitError (List QsField) :=
+  match s.err with
+  | some e => .error e
+  | none =>
+    let f := Qs.finish s.inner
+    if lim.maxFields < f.fields.size then .error (.tooManyFields lim.maxFields) else .ok f.fields.toList
+
+/-- Starlette's `FormParser`, streaming: `write` each chunk as it arrives,
+then `finalize`. `error?` reports a limit as soon as it is crossed. -/
+structure UrlencodedParser where
+  lim : FormLimits := {}
+  st : UrlState := {}
+  deriving Inhabited
+
+namespace UrlencodedParser
+def write (p : UrlencodedParser) (chunk : ByteArray) : UrlencodedParser :=
+  { p with st := (urlMachine p.lim).feedAUntil urlHalted p.st chunk }
+def finalize (p : UrlencodedParser) : Except LimitError (List QsField) := urlResult p.lim p.st
+def error? (p : UrlencodedParser) : Option LimitError := p.st.err
+end UrlencodedParser
+
+/-- Starlette's `FormParser.parse` over a whole body: the raw (still
+percent-encoded) fields, in order, under the limits. -/
 def parseUrlencodedRaw (lim : FormLimits) (body : ByteArray) : Except LimitError (List QsField) :=
-  match Qs.parse {} body with
-  | .ok fs => checkFields lim 0 fs
-  | .error _ => .error .invalidMultipart
+  ((({ lim } : UrlencodedParser)).write body).finalize
+
+/-! ### `multipart/form-data` -/
+
+/-- The multipart machine, the counts of files and fields whose headers are
+complete, whether the current part is a file, and the first limit error. -/
+structure MpState where
+  inner : MState := {}
+  nFiles : Nat := 0
+  nFields : Nat := 0
+  curIsFile : Bool := false
+  err : Option LimitError := none
+  deriving Inhabited
+
+/-- After a limit error, a parse error or the closing delimiter nothing more
+is read (the rest is the epilogue, which is ignored). -/
+def mpHalted (s : MpState) : Bool :=
+  s.err.isSome || (match s.inner.phase with | .failed _ | .done => true | _ => false)
+
+/-- One byte: step the multipart machine; when a part's headers end, check
+its name and count it as a file or a field (`max_files`, `max_fields`); while
+a field's data arrives, check its size (`max_part_size`). -/
+def mpStep (cx : Mp.Ctx) (lim : FormLimits) (s : MpState) (c : UInt8) : MpState :=
+  if mpHalted s then s else
+  match s.err with
+  | some _ => s
+  | none =>
+    let i' := Mp.step cx s.inner c
+    match s.inner.phase, i'.phase with
+    | .headersAlmostDone, .partData _ =>
+      match dispositionParams i'.headers.toList with
+      | (none, _) => { s with inner := i', err := some .missingName }
+      | (some _, some _) =>
+        if lim.maxFiles < s.nFiles + 1 then { s with inner := i', err := some (.tooManyFiles lim.maxFiles) }
+        else { s with inner := i', nFiles := s.nFiles + 1, curIsFile := true }
+      | (some _, none) =>
+        if lim.maxFields < s.nFields + 1 then { s with inner := i', err := some (.tooManyFields lim.maxFields) }
+        else { s with inner := i', nFields := s.nFields + 1, curIsFile := false }
+    | .partData _, .partData _ =>
+      if !s.curIsFile && lim.maxPartSize < i'.data.size then
+        { s with inner := i', err := some (.partTooLarge lim.maxPartSize) }
+      else { s with inner := i' }
+    | _, _ => { s with inner := i' }
+
+def mpMachine (cx : Mp.Ctx) (lim : FormLimits) : Machine MpState :=
+  { step := mpStep cx lim, pos := (·.inner.pos), limit := none }
+
+/-- The parts read, or the first error (a parser error is Starlette's
+"Invalid multipart data."). -/
+def mpResult (s : MpState) : Except LimitError (List StarlettePart) :=
+  match s.err with
+  | some e => .error e
+  | none =>
+    match s.inner.phase with
+    | .failed _ => .error .invalidMultipart
+    | _ => s.inner.parts.toList.mapM partOf
+
+/-- Starlette's `MultiPartParser`, streaming. -/
+structure MultipartFormParser where
+  cx : Mp.Ctx
+  lim : FormLimits := {}
+  st : MpState := {}
+
+namespace MultipartFormParser
+def new (boundary : Boundary) (lim : FormLimits := {}) : MultipartFormParser := { cx := { boundary }, lim }
+def write (p : MultipartFormParser) (chunk : ByteArray) : MultipartFormParser :=
+  { p with st := (mpMachine p.cx p.lim).feedAUntil mpHalted p.st chunk }
+def finalize (p : MultipartFormParser) : Except LimitError (List StarlettePart) := mpResult p.st
+def error? (p : MultipartFormParser) : Option LimitError := p.st.err
+end MultipartFormParser
 
 /-- The boundary parameter of a `Content-Type` value, if present. -/
 def boundaryParam (contentType : ByteArray) : Option Bytes :=
-  Options.lookup (Options.parseL contentType.data.toList).2 (ascii "boundary")
+  Options.lookup (Options.parseB contentType).2 (ascii "boundary")
 
-/-- Starlette's `MultiPartParser.parse`, under the limits. -/
+/-- Starlette's `MultiPartParser.parse` over a whole body, under the limits. -/
 def parseMultipartRaw (lim : FormLimits) (contentType body : ByteArray) :
     Except LimitError (List StarlettePart) :=
   match boundaryParam contentType with
@@ -327,7 +411,7 @@ def parseMultipartRaw (lim : FormLimits) (contentType body : ByteArray) :
   | some b =>
     match Boundary.ofBytes? ⟨b.toArray⟩ with
     | none => .error .invalidMultipart
-    | some bd => ofMultipart lim (Mp.parse { boundary := bd } body)
+    | some bd => ((MultipartFormParser.new bd lim).write body).finalize
 
 end Starlette
 

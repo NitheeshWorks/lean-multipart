@@ -24,7 +24,7 @@ namespace LeanMultipart
 namespace Qs
 
 /-- Clear the buffers the streaming parser does not keep. -/
-def forget (s : QsState) : QsState := { s with fields := #[], name := #[], value := #[] }
+def forget (s : QsState) : QsState := { s with fields := #[], name := ByteArray.empty, value := ByteArray.empty }
 
 theorem forgets (cfg : QsConfig) : (machine cfg).Forgets forget := by
   refine ⟨fun s => rfl, fun s c => ?_⟩
@@ -36,7 +36,7 @@ end Qs
 
 namespace QuerystringParser
 
-theorem emitIf_append (evs : Array QsEvent) (b : Array UInt8) (mk : ByteArray → QsEvent) :
+theorem emitIf_append (evs : Array QsEvent) (b : ByteArray) (mk : ByteArray → QsEvent) :
     emitIf evs b mk = evs ++ emitIf #[] b mk := by
   unfold emitIf; split <;> simp
 
@@ -76,17 +76,17 @@ field the collector plus what the parser still holds is the whole-buffer
 name and value. -/
 def Inv (W P : QsState) (C : Collector) : Prop :=
   Qs.forget W = Qs.forget P ∧ C.done.toList = W.fields.toList ∧
-  (W.phase = .fieldName → C.name.toList ++ P.name.toList = W.name.toList ∧ P.value = #[] ∧
+  (W.phase = .fieldName → C.name.toList ++ P.name.toList = W.name.toList ∧ P.value = ByteArray.empty ∧
       C.value.toList = W.value.toList) ∧
-  (W.phase = .fieldData → C.name.toList = W.name.toList ∧ P.name = #[] ∧
+  (W.phase = .fieldData → C.name.toList = W.name.toList ∧ P.name = ByteArray.empty ∧
       C.value.toList ++ P.value.toList = W.value.toList)
 
 theorem forget_eq {W P : QsState} (h : Qs.forget W = Qs.forget P) :
     W.phase = P.phase ∧ W.pos = P.pos ∧ W.nameStart = P.nameStart := by
   cases W; cases P; simp [Qs.forget] at h; simp [h]
 
-theorem ba_eq {a b : Array UInt8} (h : a.toList = b.toList) : (⟨a⟩ : ByteArray) = ⟨b⟩ := by
-  rw [Array.toList_inj.1 h]
+theorem ba_eq {a b : ByteArray} (h : a.toList = b.toList) : a = b := by
+  apply ByteArray.ext_toList; simpa using h
 
 theorem inv_step (cfg : QsConfig) (W P : QsState) (C : Collector) (c : UInt8) (h : Inv W P C) :
     Inv (Qs.step cfg W c) (stepEv cfg (P, #[]) c).1 (C.events (stepEv cfg (P, #[]) c).2) := by
@@ -118,22 +118,22 @@ theorem inv_step (cfg : QsConfig) (W P : QsState) (C : Collector) (c : UInt8) (h
     by_cases hA : c = Byte.AMP
     · subst hA; cases hs : cfg.strictParsing
       · simp_all [Qs.step, Qs.nameByte, Qs.finishField, stepEv, emitIf, Collector.events, Collector.event]
-        split <;> simp_all [Collector.event] <;> (apply Array.toList_inj.1; simp_all)
+        split <;> simp_all [Collector.event] <;> (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
       · simp_all [Qs.step, Qs.nameByte, stepEv, Collector.events]
     · by_cases hE : c = Byte.EQ
       · subst hE
         simp_all [Qs.step, Qs.nameByte, stepEv, emitIf, Collector.events]
-        split <;> simp_all [Collector.event] <;> (apply Array.toList_inj.1; simp_all)
+        split <;> simp_all [Collector.event] <;> (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all )))
       · simp_all [Qs.step, Qs.nameByte, stepEv, Collector.events]
-        rw [← h1]; simp
+        simp_all [← List.append_assoc]
   | fieldData =>
     obtain ⟨h1, h2, h3⟩ := hv rfl
     by_cases hA : c = Byte.AMP
     · subst hA
       simp_all [Qs.step, Qs.finishField, stepEv, emitIf, Collector.events, Collector.event]
-      split <;> simp_all [Collector.event] <;> (apply Array.toList_inj.1; simp_all)
+      split <;> simp_all [Collector.event] <;> (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
     · simp_all [Qs.step, stepEv, Collector.events, Collector.event]
-      rw [← h3]; simp
+      simp_all [← List.append_assoc]
 
 theorem inv_fold (cfg : QsConfig) (l : Bytes) : ∀ (W P : QsState) (C : Collector), Inv W P C →
     Inv (Qs.feed cfg W l) (l.foldl (stepEv cfg) (P, #[])).1 (C.events (l.foldl (stepEv cfg) (P, #[])).2) := by
@@ -191,9 +191,7 @@ theorem write_eq (cfg : QsConfig) (P : QsState) (chunk : ByteArray) :
   have hsz : chunk.size = chunk.data.toList.length := (Array.length_toList).symm
   unfold write
   simp only
-  rw [← Array.foldl_toList, Array.toList_extract, ← hsz]
-  simp only [List.extract, Nat.sub_zero, List.drop_zero]
-  rw [hsz]
+  rw [bytesFold_take, ← hsz]
   generalize List.foldl (stepEv cfg) (P, #[]) _ = r
   obtain ⟨r1, r2⟩ := r
   rw [flush_append r1 r2]
@@ -264,7 +262,7 @@ end QuerystringParser
 namespace Mp
 
 /-- Clear the buffers the streaming parser does not keep. -/
-def forget (s : MState) : MState := { s with data := #[], parts := #[] }
+def forget (s : MState) : MState := { s with data := ByteArray.empty, parts := #[] }
 
 theorem forgets (cx : Ctx) : (machine cx).Forgets forget := by
   refine ⟨fun s => rfl, fun s c => ?_⟩
@@ -315,11 +313,11 @@ theorem stepEv_fst (cx : Mp.Ctx) (s : MState) (evs : Array MultipartEvent) (c : 
 def PhaseInv (W P : MState) (C : Collector) : Prop :=
   match W.phase with
   | .headerFieldStart | .headerValueAlmostDone | .headersAlmostDone =>
-    C.headers = W.headers ∧ C.body = #[]
-  | .headerField => C.headers = W.headers ∧ C.body = #[] ∧ C.hname = #[] ∧ C.hvalue = #[]
+    C.headers = W.headers ∧ C.body = ByteArray.empty
+  | .headerField => C.headers = W.headers ∧ C.body = ByteArray.empty ∧ C.hname = ByteArray.empty ∧ C.hvalue = ByteArray.empty
   | .headerValueStart | .headerValue =>
-    C.headers = W.headers ∧ C.body = #[] ∧ C.hname.toList = W.name.toList ∧ C.hvalue = #[]
-  | .partData _ => C.headers = W.headers ∧ W.data.toList = C.body.toList ++ P.data.toList
+    C.headers = W.headers ∧ C.body = ByteArray.empty ∧ C.hname = W.name ∧ C.hvalue = ByteArray.empty
+  | .partData _ => C.headers = W.headers ∧ W.data = C.body ++ P.data
   | _ => True
 
 /-- The invariant: forgotten states agree, the collector has every
@@ -352,32 +350,32 @@ theorem inv_step (cx : Mp.Ctx) (W P : MState) (C : Collector) (c : UInt8) (h : I
     cases m <;> simp only [PhaseInv] at hph <;>
       simp only [Mp.step, Mp.matchByte, Mp.restart, Mp.beginPart, Mp.finishPart, stepEv, emitIf, lastBody] <;>
       (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | start =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.sbByte, Mp.fail, stepEv]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | preamble =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.sbByte, Mp.fail, stepEv]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | startBoundary k =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.sbByte, Mp.fail, stepEv]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | startBoundaryCR =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.fail, Mp.beginPart, stepEv, emitIf]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | endBoundary =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.fail, stepEv, emitIf]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | headerFieldStart =>
     simp only [PhaseInv] at hph
     by_cases hcr : c = Byte.CR
@@ -385,10 +383,10 @@ theorem inv_step (cx : Mp.Ctx) (W P : MState) (C : Collector) (c : UInt8) (h : I
     · by_cases hn : cx.cfg.maxHeaderCount < whc + 1
       · simp_all [Mp.step, Mp.fail, stepEv, PhaseInv, Collector.events]
       · have e : Mp.step cx ⟨.headerFieldStart, wpos, whc, whs, wn, wv, wh, wd, wp⟩ c =
-            Mp.headerFieldByte cx ⟨.headerFieldStart, wpos + 1, whc + 1, 0, #[], wv, wh, wd, wp⟩ c wpos := by
+            Mp.headerFieldByte cx ⟨.headerFieldStart, wpos + 1, whc + 1, 0, ByteArray.empty, wv, wh, wd, wp⟩ c wpos := by
           simp [Mp.step, hcr, hn]
         have e' : Mp.step cx ⟨.headerFieldStart, wpos, whc, whs, wn, wv, wh, pd, pp⟩ c =
-            Mp.headerFieldByte cx ⟨.headerFieldStart, wpos + 1, whc + 1, 0, #[], wv, wh, pd, pp⟩ c wpos := by
+            Mp.headerFieldByte cx ⟨.headerFieldStart, wpos + 1, whc + 1, 0, ByteArray.empty, wv, wh, pd, pp⟩ c wpos := by
           simp [Mp.step, hcr, hn]
         simp only [stepEv, e, e']
         unfold Mp.headerFieldByte
@@ -398,37 +396,37 @@ theorem inv_step (cx : Mp.Ctx) (W P : MState) (C : Collector) (c : UInt8) (h : I
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.headerFieldByte, Mp.fail, stepEv, emitIf]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | headerValueStart =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.headerValueByte, Mp.fail, stepEv, emitIf]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | headerValue =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.headerValueByte, Mp.fail, stepEv, emitIf]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | headerValueAlmostDone =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.fail, stepEv]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | headersAlmostDone =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, Mp.fail, stepEv, emitIf]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events, Collector.event] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | done =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, stepEv]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
   | failed e =>
     simp only [PhaseInv] at hph
     simp only [Mp.step, stepEv]
     (repeat' split) <;> simp_all [PhaseInv, Collector.events] <;>
-      (apply Array.toList_inj.1; simp_all [ByteArray.empty, ByteArray.emptyWithCapacity]) <;> rfl
+      (try ((try (refine ⟨?_, ?_⟩)) <;> first | rfl | (apply ByteArray.ext_toList; simp_all [ByteArray.data_append]) | (apply Array.ext'; simp_all [ByteArray.data_append])))
 
 theorem forget_eq {W P : MState} (h : Mp.forget W = Mp.forget P) : W.phase = P.phase ∧ W.pos = P.pos := by
   cases W; cases P; simp [Mp.forget] at h; simp [h]
@@ -454,8 +452,7 @@ theorem inv_flush (W P : MState) (C : Collector) (h : Inv W P C) :
     · simp only [emitIf]; split <;> simp_all [Collector.events, Collector.event] <;> rfl
     · unfold PhaseInv at hph ⊢
       rw [hp, hm] at hph ⊢
-      simp only [emitIf]; split <;> simp_all [Collector.events, Collector.event, ByteArray.empty,
-        ByteArray.emptyWithCapacity] <;> rfl
+      simp only [emitIf]; split <;> simp_all [Collector.events, Collector.event]
   · exact ⟨hf, by simpa [Collector.events] using hd, by simpa [Collector.events] using hph⟩
 
 theorem failed_feed (cx : Mp.Ctx) (s : MState) (e : MultipartError) (h : s.phase = .failed e) (l : Bytes) :
@@ -474,9 +471,7 @@ theorem write_eq (cx : Mp.Ctx) (P : MState) (chunk : ByteArray) :
   have hsz : chunk.size = chunk.data.toList.length := (Array.length_toList).symm
   unfold write
   simp only
-  rw [← Array.foldl_toList, Array.toList_extract, ← hsz]
-  simp only [List.extract, Nat.sub_zero, List.drop_zero]
-  rw [hsz]
+  rw [bytesFold_take, ← hsz]
   generalize List.foldl (stepEv cx) (P, #[]) _ = r
   obtain ⟨r1, r2⟩ := r
   rw [flush_append r1 r2]

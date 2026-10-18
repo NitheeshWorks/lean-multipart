@@ -300,15 +300,17 @@ theorem lookup_ok (l : List (Bytes × Bytes)) (k : Bytes) (v : Bytes) (h : l.fin
 
 /-- **The Content-Disposition round trip.** The `name` and `filename` a form
 part was printed with are read back by upstream's `parse_options_header`
-logic, for names without `"`, `\` or `;`. -/
+logic, for names without `"`, `\` or `;`, and a header value within
+`Options.maxLength`. -/
 theorem dispositionParams_formPart (n : ByteArray) (f ct : Option ByteArray) (body : ByteArray)
-    (hn : Options.SafeParam n.data.toList) (hf : ∀ x, f = some x → Options.SafeParam x.data.toList) :
+    (hn : Options.SafeParam n.data.toList) (hf : ∀ x, f = some x → Options.SafeParam x.data.toList)
+    (hlen : (dispositionValue n f).size ≤ Options.maxLength) :
     dispositionParams (formPart n f ct body).headers = (some n.data.toList, f.map (·.data.toList)) := by
   have hcd : headerLookup (formPart n f ct body).headers (ascii "content-disposition") = some (dispositionValue n f) := by
     cases ct <;> simp [formPart, headerLookup, lowerAscii, ascii] <;> decide
   unfold dispositionParams
   rw [hcd]
-  simp only [Option.getD_some, dispositionValue_toList]
+  simp only [Option.getD_some, Options.parseB, hlen, ite_true, dispositionValue_toList]
   rw [Options.parseL_dispositionL _ _ hn (fun x hx => by
     cases f with
     | none => cases hx

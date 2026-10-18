@@ -26,16 +26,16 @@ Semantics, as upstream:
 namespace LeanMultipart
 namespace Mp
 
-/-- What the machine needs besides its state: the boundary and the limits. -/
+/-- What the machine needs besides its state: the boundary and the limits,
+and the delimiter `CR LF -- boundary`, computed once. -/
 structure Ctx where
   boundary : Boundary
   cfg : MultipartConfig := {}
-
-/-- The delimiter `CR LF -- boundary`. -/
-def Ctx.delim (cx : Ctx) : Array UInt8 := cx.boundary.delim
+  delim : ByteArray := boundary.delim
+  h_delim : delim = boundary.delim := by rfl
 
 /-- Delimiter byte `k` (0 past the end, which a valid index never is). -/
-def Ctx.dAt (cx : Ctx) (k : Nat) : UInt8 := cx.delim.getD k 0
+def Ctx.dAt (cx : Ctx) (k : Nat) : UInt8 := if h : k < cx.delim.size then cx.delim[k] else 0
 
 def Ctx.dlen (cx : Ctx) : Nat := cx.delim.size
 
@@ -44,12 +44,12 @@ def fail (s : MState) (k : MultipartErrorKind) (p : Nat) : MState :=
 
 /-- A new part begins: reset the per-part buffers. -/
 def beginPart (s : MState) : MState :=
-  { s with phase := .headerFieldStart, hdrCount := 0, hdrSize := 0, name := #[], value := #[],
-           headers := #[], data := #[] }
+  { s with phase := .headerFieldStart, hdrCount := 0, hdrSize := 0, name := ByteArray.empty, value := ByteArray.empty,
+           headers := #[], data := ByteArray.empty }
 
 /-- The current part is complete. -/
 def finishPart (s : MState) : MState :=
-  { s with parts := s.parts.push ⟨s.headers.toList, ⟨s.data⟩⟩, headers := #[], data := #[] }
+  { s with parts := s.parts.push ⟨s.headers.toList, s.data⟩, headers := #[], data := ByteArray.empty }
 
 /-- A byte of the opening `--boundary`, `k` bytes of which are matched. -/
 def sbByte (cx : Ctx) (k : Nat) (s : MState) (c : UInt8) (p : Nat) : MState :=
@@ -66,15 +66,15 @@ def headerFieldByte (cx : Ctx) (s : MState) (c : UInt8) (p : Nat) : MState :=
   if cx.cfg.maxHeaderSize < z then fail s .headerSizeExceeded p
   else if c == Byte.COLON then
     if s.name.isEmpty then fail s .emptyHeaderName p
-    else { s with phase := .headerValueStart, hdrSize := z, value := #[] }
+    else { s with phase := .headerValueStart, hdrSize := z, value := ByteArray.empty }
   else if Byte.isTokenChar c then { s with phase := .headerField, hdrSize := z, name := s.name.push c }
   else fail s .invalidHeaderChar p
 
 /-- A byte of a header value, or the `CR` that ends it. -/
 def headerValueByte (cx : Ctx) (s : MState) (c : UInt8) (p : Nat) : MState :=
   if c == Byte.CR then
-    { s with phase := .headerValueAlmostDone, headers := s.headers.push (⟨s.name⟩, ⟨s.value⟩),
-             name := #[], value := #[], hdrSize := 0 }
+    { s with phase := .headerValueAlmostDone, headers := s.headers.push (s.name, s.value),
+             name := ByteArray.empty, value := ByteArray.empty, hdrSize := 0 }
   else
     let z := s.hdrSize + 1
     if cx.cfg.maxHeaderSize < z then fail s .headerSizeExceeded p
@@ -93,6 +93,7 @@ def matchByte (cx : Ctx) (m : DelimMatch) (s : MState) (c : UInt8) : MState :=
     if c == cx.dAt k then
       if k + 1 == cx.dlen then { s with phase := .partData .afterD }
       else { s with phase := .partData (.idx (k + 1)) }
+    else if k == 0 then restart s c
     else restart { s with data := s.data ++ cx.delim.extract 0 k } c
   | .afterD =>
     if c == Byte.CR then { s with phase := .partData .afterDCR }
@@ -122,7 +123,7 @@ def step (cx : Ctx) (s : MState) (c : UInt8) : MState :=
     else
       let n := s.hdrCount + 1
       if cx.cfg.maxHeaderCount < n then fail s .headerCountExceeded p
-      else headerFieldByte cx { s with hdrCount := n, hdrSize := 0, name := #[] } c p
+      else headerFieldByte cx { s with hdrCount := n, hdrSize := 0, name := ByteArray.empty } c p
   | .headerField => headerFieldByte cx s c p
   | .headerValueStart =>
     if c == Byte.SPACE then
@@ -133,7 +134,7 @@ def step (cx : Ctx) (s : MState) (c : UInt8) : MState :=
   | .headerValueAlmostDone =>
     if c == Byte.LF then { s with phase := .headerFieldStart } else fail s .noLFAfterHeader p
   | .headersAlmostDone =>
-    if c == Byte.LF then { s with phase := .partData (.idx 0), data := #[] }
+    if c == Byte.LF then { s with phase := .partData (.idx 0), data := ByteArray.empty }
     else fail s .noLFAfterHeaders p
   | .partData m => matchByte cx m s c
 
@@ -161,7 +162,7 @@ def feedChunks (cx : Ctx) (s : MState) (cs : List Bytes) : MState := (machine cx
 def result (s : MState) : MultipartResult where
   parts := s.parts.toList
   current := match s.phase with
-    | .partData _ => some ⟨s.headers.toList, ⟨s.data⟩⟩
+    | .partData _ => some ⟨s.headers.toList, s.data⟩
     | _ => none
   ended := s.phase == .done
   error := match s.phase with
@@ -175,7 +176,7 @@ def parseL (cx : Ctx) (l : Bytes) : MultipartResult := result (feedT cx {} l)
 /-- Feed a byte array, truncated at `maxSize`, as an array fold (no
 intermediate list). Equal to `feedT` on the list (`Mp.feedA_eq`). -/
 def feedA (cx : Ctx) (s : MState) (b : ByteArray) : MState :=
-  (b.data.extract 0 (room cx s b.size)).foldl (step cx) s
+  (machine cx).feedA s b
 
 /-- The whole-buffer parser. Equal to `parseL` on the bytes (`Mp.parse_eq`). -/
 def parse (cx : Ctx) (body : ByteArray) : MultipartResult := result (feedA cx {} body)

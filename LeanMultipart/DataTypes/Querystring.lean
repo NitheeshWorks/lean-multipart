@@ -51,8 +51,8 @@ structure QsState where
   phase : QsPhase := .beforeField false
   pos : Nat := 0
   nameStart : Nat := 0
-  name : Array UInt8 := #[]
-  value : Array UInt8 := #[]
+  name : ByteArray := ByteArray.empty
+  value : ByteArray := ByteArray.empty
   fields : Array QsField := #[]
   deriving Inhabited
 

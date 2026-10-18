@@ -42,17 +42,21 @@ variable (cx : Ctx)
 /-- The delimiter, as a list. -/
 abbrev D : Bytes := cx.boundary.delimL
 
+theorem delim_data : cx.delim.data = (D cx).toArray := by rw [cx.h_delim]; rfl
+
 theorem dlen_eq : cx.dlen = (D cx).length := by
-  simp [Ctx.dlen, Ctx.delim, Boundary.delim]
+  unfold Ctx.dlen
+  show cx.delim.data.size = _
+  rw [delim_data]; simp
 
 theorem dlen_ge : 5 ≤ cx.dlen := by
   have h := cx.boundary.h_valid.1
   rw [dlen_eq]; simp [Boundary.delimL, Boundary.toList] at h ⊢; omega
 
 theorem dAt_eq (k : Nat) (hk : k < cx.dlen) : cx.dAt k = (D cx)[k]'(by rw [← dlen_eq]; exact hk) := by
-  simp [Ctx.dAt, Ctx.delim, Boundary.delim, Array.getD]
-  rw [dlen_eq] at hk
-  simp [hk]
+  unfold Ctx.dAt
+  simp only [show k < cx.delim.size by unfold Ctx.dlen at hk; exact hk, ↓reduceDIte]
+  simp [cx.h_delim, Boundary.delim, ByteArray.getElem_eq_getElem_data]
 
 theorem D_get_succ (k : Nat) (hk : k + 1 < (D cx).length) :
     (D cx)[k + 1] = ([Byte.LF, Byte.HYPHEN, Byte.HYPHEN] ++ cx.boundary.toList)[k]'(by
@@ -72,10 +76,10 @@ theorem dAt_ne_CR (k : Nat) (h1 : 1 ≤ k) (hk : k < cx.dlen) : cx.dAt k ≠ Byt
   · exact hne _ h' rfl
   · exact absurd (hb _ h') (by decide)
 
-theorem delim_toList : cx.delim.toList = D cx := by simp [Ctx.delim, Boundary.delim]
+theorem delim_toList : cx.delim.data.toList = D cx := by rw [delim_data]
 
-theorem delim_extract_toList (k : Nat) : (cx.delim.extract 0 k).toList = (D cx).take k := by
-  simp [Array.toList_extract, delim_toList, List.extract]
+theorem delim_extract_toList (k : Nat) : (cx.delim.extract 0 k).data.toList = (D cx).take k := by
+  simp [ByteArray.data_extract, Array.toList_extract, delim_toList]
 
 
 theorem D_drop2 : (D cx).drop 2 = Byte.HYPHEN :: (D cx).drop 3 := by
@@ -166,13 +170,13 @@ theorem token_ne_CR {c : UInt8} (h : Byte.isTokenChar c = true) : c ≠ Byte.CR 
 theorem token_ne_COLON {c : UInt8} (h : Byte.isTokenChar c = true) : c ≠ Byte.COLON := by
   rintro rfl; exact absurd h (by decide)
 
-theorem push_append_toArray (a : Array UInt8) (c : UInt8) (l : Bytes) :
-    a.push c ++ l.toArray = a ++ (c :: l).toArray := by
-  apply Array.ext'; simp
+theorem push_append_toArray (a : ByteArray) (c : UInt8) (l : Bytes) :
+    a.push c ++ ⟨l.toArray⟩ = a ++ ⟨(c :: l).toArray⟩ := by
+  apply ByteArray.ext; simp [ByteArray.data_append]
 
 theorem feed_nameChars (t : Bytes) : ∀ (s : MState), s.phase = .headerField →
     (∀ c ∈ t, Byte.isTokenChar c = true) → s.hdrSize + t.length ≤ cx.cfg.maxHeaderSize →
-    feed cx s t = { s with pos := s.pos + t.length, name := s.name ++ t.toArray, hdrSize := s.hdrSize + t.length } := by
+    feed cx s t = { s with pos := s.pos + t.length, name := s.name ++ ⟨t.toArray⟩, hdrSize := s.hdrSize + t.length } := by
   induction t with
   | nil => intro s _ _ _; cases s; simp [feed]
   | cons c cs ih =>
@@ -189,7 +193,7 @@ theorem feed_nameChars (t : Bytes) : ∀ (s : MState), s.phase = .headerField �
 
 theorem feed_valueChars (t : Bytes) : ∀ (s : MState), s.phase = .headerValue →
     (∀ c ∈ t, c ≠ Byte.CR) → s.hdrSize + t.length ≤ cx.cfg.maxHeaderSize →
-    feed cx s t = { s with pos := s.pos + t.length, value := s.value ++ t.toArray, hdrSize := s.hdrSize + t.length } := by
+    feed cx s t = { s with pos := s.pos + t.length, value := s.value ++ ⟨t.toArray⟩, hdrSize := s.hdrSize + t.length } := by
   induction t with
   | nil => intro s _ _ _; cases s; simp [feed]
   | cons c cs ih =>
@@ -206,16 +210,16 @@ theorem feed_valueChars (t : Bytes) : ∀ (s : MState), s.phase = .headerValue �
 
 /-- At the start of a header line, with empty buffers. -/
 def HdrStart (s : MState) : Prop :=
-  s.phase = .headerFieldStart ∧ s.name = #[] ∧ s.value = #[] ∧ s.hdrSize = 0
+  s.phase = .headerFieldStart ∧ s.name = ByteArray.empty ∧ s.value = ByteArray.empty ∧ s.hdrSize = 0
 
 theorem ba_eta (b : ByteArray) : (⟨b.data.toList.toArray⟩ : ByteArray) = b := by cases b; simp
 
 /-- From `headerValueStart`: optional value, `CR`, `LF`. -/
 theorem feed_value_end (s : MState) (v : Bytes) (hp : s.phase = .headerValueStart)
     (hv : ∀ c ∈ v, c ≠ Byte.CR) (hsp : v.head? ≠ some Byte.SPACE)
-    (hz : s.hdrSize + v.length ≤ cx.cfg.maxHeaderSize) (hval : s.value = #[]) :
+    (hz : s.hdrSize + v.length ≤ cx.cfg.maxHeaderSize) (hval : s.value = ByteArray.empty) :
     feed cx s (v ++ [Byte.CR, Byte.LF]) =
-      { s with pos := s.pos + v.length + 2, phase := .headerFieldStart, name := #[], value := #[], hdrSize := 0, headers := s.headers.push (⟨s.name⟩, ⟨v.toArray⟩) } := by
+      { s with pos := s.pos + v.length + 2, phase := .headerFieldStart, name := ByteArray.empty, value := ByteArray.empty, hdrSize := 0, headers := s.headers.push (s.name, ⟨v.toArray⟩) } := by
   cases v with
   | nil =>
     simp [feed, step, hp, headerValueByte, hval]
@@ -229,7 +233,8 @@ theorem feed_value_end (s : MState) (v : Bytes) (hp : s.phase = .headerValueStar
       feed cx (step cx s v0) (vs ++ [Byte.CR, Byte.LF]) from rfl, hs, feed_append,
       feed_valueChars cx vs _ rfl (fun x hx => hv x (by simp [hx])) (by simp at hz ⊢; omega)]
     simp [feed, step, headerValueByte, hval]
-    omega
+    refine ⟨by omega, ?_⟩
+    congr 2
 
 /-- One header line from the start of a line. -/
 theorem feed_headerLine (s : MState) (hs : HdrStart s) (hc : s.hdrCount + 1 ≤ cx.cfg.maxHeaderCount)
@@ -246,7 +251,7 @@ theorem feed_headerLine (s : MState) (hs : HdrStart s) (hc : s.hdrCount + 1 ≤ 
   have hcnt : ¬ cx.cfg.maxHeaderCount < s.hdrCount + 1 := by omega
   have hsz1 : ¬ cx.cfg.maxHeaderSize < 0 + 1 := by rw [hnl] at hlen; simp at hlen; omega
   -- the first name byte
-  have s1 : step cx s n0 = { s with pos := s.pos + 1, hdrCount := s.hdrCount + 1, phase := .headerField, hdrSize := 1, name := #[n0] } := by
+  have s1 : step cx s n0 = { s with pos := s.pos + 1, hdrCount := s.hdrCount + 1, phase := .headerField, hdrSize := 1, name := ByteArray.empty.push n0 } := by
     simp [step, hp, headerFieldByte, hcnt, token_ne_CR ht0, token_ne_COLON ht0, ht0, hsz1]
   have hlen' := hlen; rw [hnl] at hlen'; simp at hlen'
   have hline : headerLineL h =
@@ -261,7 +266,9 @@ theorem feed_headerLine (s : MState) (hs : HdrStart s) (hc : s.hdrCount + 1 ≤ 
   rw [e2]
   have hcol : ¬ cx.cfg.maxHeaderSize < 1 + ns.length + 1 := by omega
   have hspc : ¬ cx.cfg.maxHeaderSize < 1 + ns.length + 1 + 1 := by omega
-  simp [step, headerFieldByte, hcol, hspc]
+  have hnemp : (ByteArray.empty.push n0 ++ ⟨ns.toArray⟩).isEmpty = false := by
+    simp [ByteArray.isEmpty, ByteArray.size_append]
+  simp [step, headerFieldByte, hcol, hspc, hnemp]
   rw [feed_value_end cx _ h.2.data.toList rfl hcr hsp (by simp; omega) rfl]
   cases s
   simp only at hp hn hv hz ⊢
@@ -269,8 +276,10 @@ theorem feed_headerLine (s : MState) (hs : HdrStart s) (hc : s.hdrCount + 1 ≤ 
   simp only [MState.mk.injEq, true_and, and_true]
   constructor
   · rw [hline]; simp; omega
-  · have e : ((⟨(n0 :: ns).toArray⟩ : ByteArray), (⟨h.2.data.toList.toArray⟩ : ByteArray)) = h := by
-      rw [← hnl, ba_eta, ba_eta]
+  · have e : ((ByteArray.empty.push n0 ++ ⟨ns.toArray⟩ : ByteArray), (⟨h.2.data.toList.toArray⟩ : ByteArray)) = h := by
+      have : (ByteArray.empty.push n0 ++ ⟨ns.toArray⟩ : ByteArray) = ⟨h.1.data.toList.toArray⟩ := by
+        apply ByteArray.ext; simp [ByteArray.data_append, hnl]
+      rw [this, ba_eta, ba_eta]
     rw [e]
 
 
@@ -289,7 +298,7 @@ theorem feed_headers (hs : List (ByteArray × ByteArray)) : ∀ (s : MState), Hd
 
 /-- The empty line that ends the headers starts the body. -/
 theorem feed_headersEnd (s : MState) (hs : HdrStart s) :
-    feed cx s [Byte.CR, Byte.LF] = { s with pos := s.pos + 2, phase := .partData (.idx 0), data := #[] } := by
+    feed cx s [Byte.CR, Byte.LF] = { s with pos := s.pos + 2, phase := .partData (.idx 0), data := ByteArray.empty } := by
   obtain ⟨hp, _, _, _⟩ := hs
   cases s; simp_all [feed, step]
 
@@ -337,7 +346,7 @@ theorem feed_body (body : Bytes) : ∀ (s : MState) (k : Nat), s.phase = .partDa
       by_cases hcr : c = Byte.CR
       · subst hcr
         have hs : step cx s Byte.CR = { s with pos := s.pos + 1, phase := .partData (.idx 1), data := s.data ++ cx.delim.extract 0 k } := by
-          simp [step, hp, matchByte, hc, restart]
+          simp [step, hp, matchByte, hc, restart] <;> (try (intro h; subst h; simp [ByteArray.extract_same]))
         rw [hs]
         have h1D : (D cx).take 1 = [Byte.CR] := by simp [Boundary.delimL]
         obtain ⟨k', h1, h2, h3, h4, h5⟩ := ih { s with pos := s.pos + 1, phase := .partData (.idx 1), data := s.data ++ cx.delim.extract 0 k } 1
@@ -345,7 +354,7 @@ theorem feed_body (body : Bytes) : ∀ (s : MState) (k : Nat), s.phase = .partDa
         refine ⟨k', h1, h2, ?_, h4, h5⟩
         simp only [feed] at h3; rw [h3, h1D]; simp [delim_toList]
       · have hs : step cx s c = { s with pos := s.pos + 1, phase := .partData (.idx 0), data := (s.data ++ cx.delim.extract 0 k).push c } := by
-          simp [step, hp, matchByte, hc, restart, hcr]
+          simp [step, hp, matchByte, hc, restart, hcr] <;> (try (intro h; subst h; simp [ByteArray.extract_same]))
         rw [hs]
         obtain ⟨k', h1, h2, h3, h4, h5⟩ := ih { s with pos := s.pos + 1, phase := .partData (.idx 0), data := (s.data ++ cx.delim.extract 0 k).push c } 0
           rfl (by have := dlen_ge cx; omega)
@@ -397,7 +406,7 @@ theorem feed_delim (s : MState) (k : Nat) (hp : s.phase = .partData (.idx k)) (h
     simp only [feed, List.foldl_cons]
     have hne : Byte.CR ≠ cx.dAt k := fun h => dAt_ne_CR cx k (by omega) hk h.symm
     have hs : step cx s Byte.CR = { s with pos := s.pos + 1, phase := .partData (.idx 1), data := s.data ++ cx.delim.extract 0 k } := by
-      simp [step, hp, matchByte, hne, restart]
+      simp [step, hp, matchByte, hne, restart] <;> (try (intro h; subst h; simp [ByteArray.extract_same]))
     rw [hs]
     have := feed_matchFrom cx _ { s with pos := s.pos + 1, phase := .partData (.idx 1), data := s.data ++ cx.delim.extract 0 k } 1 rfl (by omega) rfl
     simp only [feed] at this
@@ -443,7 +452,7 @@ theorem feed_part (P : List RawPart) (s : MState) (hs : PartStart P s) (p : RawP
   have hP1 : ({ s with pos := s.pos + (p.headers.flatMap headerLineL).length, hdrCount := s.hdrCount + p.headers.length, headers := s.headers ++ p.headers.toArray } : MState).parts.toList = P := hP
   generalize ({ s with pos := s.pos + (p.headers.flatMap headerLineL).length, hdrCount := s.hdrCount + p.headers.length, headers := s.headers ++ p.headers.toArray } : MState) = t1 at hT1 hH1 hP1 ⊢
   rw [feed_headersEnd cx t1 hT1]
-  obtain ⟨k', b1, b2, b3, b4, b5⟩ := feed_body cx p.body.data.toList { t1 with pos := t1.pos + 2, phase := .partData (.idx 0), data := #[] }
+  obtain ⟨k', b1, b2, b3, b4, b5⟩ := feed_body cx p.body.data.toList { t1 with pos := t1.pos + 2, phase := .partData (.idx 0), data := ByteArray.empty }
     0 rfl (by have := dlen_ge cx; omega) (by simpa using hbody)
   obtain ⟨d1, d2, d3, d4⟩ := feed_delim cx _ k' b1 b2
   refine ⟨d1, ?_, ?_, ?_⟩

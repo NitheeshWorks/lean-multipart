@@ -10,7 +10,7 @@ import LeanMultipart.Proofs.MultipartRoundTrip
 |---|---|
 | `API.parseBoundary contentType` | `Except BoundaryError {b // ValidBoundary b}` |
 | `API.boundary contentType` | `Except BoundaryError Boundary` |
-| `API.parseMultipart b cfg body` | `{r // Spec.MpParseSpec ⟨b, cfg⟩ body r}` |
+| `API.parseMultipart b cfg body` | `{r // Spec.MpParseSpec { boundary := b, cfg := cfg } body r}` |
 | `MultipartParser.new / write / finalize` | the streaming, callback-style parser |
 -/
 
@@ -51,13 +51,13 @@ and the bytes processed. The refinement: any chunking fed to the streaming
 parser gives the same result, at most the body is processed, and an error's
 offset lies in the processed bytes. -/
 def parseMultipart (b : Boundary) (cfg : MultipartConfig) (body : ByteArray) :
-    {r : MultipartResult // Spec.MpParseSpec ⟨b, cfg⟩ body r} :=
-  ⟨Mp.parse ⟨b, cfg⟩ body, by
+    {r : MultipartResult // Spec.MpParseSpec { boundary := b, cfg := cfg } body r} :=
+  ⟨Mp.parse { boundary := b, cfg := cfg } body, by
     refine ⟨fun cs hcs => by rw [MultipartParser.parseChunks_eq, hcs], ?_,
-      by rw [Mp.parse_eq]; exact fun e he => (Mp.parse_total ⟨b, cfg⟩ body.data.toList).2 e he⟩
+      by rw [Mp.parse_eq]; exact fun e he => (Mp.parse_total { boundary := b, cfg := cfg } body.data.toList).2 e he⟩
     rw [Mp.parse_eq]
-    · have h1 := (Mp.parse_total ⟨b, cfg⟩ body.data.toList).1
-      have hr : Mp.room ⟨b, cfg⟩ {} body.data.toList.length ≤ body.data.toList.length := by
+    · have h1 := (Mp.parse_total { boundary := b, cfg := cfg } body.data.toList).1
+      have hr : Mp.room { boundary := b, cfg := cfg } {} body.data.toList.length ≤ body.data.toList.length := by
         unfold Mp.room; split <;> omega
       have hs : body.size = body.data.toList.length := (Array.length_toList).symm
       rw [hs]; omega⟩

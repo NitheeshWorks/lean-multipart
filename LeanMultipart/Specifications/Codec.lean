@@ -30,7 +30,7 @@ def UrlencodeRoundTripExt : Prop :=
 /-- The `name` and `filename` a form part is printed with are read back. -/
 def DispositionRoundTrip : Prop :=
   ∀ (n : ByteArray) (f ct : Option ByteArray) (body : ByteArray), Options.SafeParam n.data.toList →
-    (∀ x, f = some x → Options.SafeParam x.data.toList) →
+    (∀ x, f = some x → Options.SafeParam x.data.toList) → (dispositionValue n f).size ≤ Options.maxLength →
     dispositionParams (formPart n f ct body).headers = (some n.data.toList, f.map (·.data.toList))
 
 /-- The querystring parser is total: it processes `min(len, maxSize)` bytes

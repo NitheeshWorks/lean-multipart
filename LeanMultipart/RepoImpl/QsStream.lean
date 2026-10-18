@@ -61,9 +61,9 @@ structure QuerystringParser where
 
 namespace QuerystringParser
 
-def emitIf (evs : Array QsEvent) (b : Array UInt8) (mk : ByteArray → QsEvent) :
+def emitIf (evs : Array QsEvent) (b : ByteArray) (mk : ByteArray → QsEvent) :
     Array QsEvent :=
-  if b.size == 0 then evs else evs.push (mk ⟨b⟩)
+  if b.size == 0 then evs else evs.push (mk b)
 
 /-- One byte: step the machine and fire the callbacks of the transition.
 Only the old phase is kept, so the buffers are updated in place. -/
@@ -74,20 +74,20 @@ def stepEv (cfg : QsConfig) : QsState × Array QsEvent → UInt8 → QsState × 
   match ph, s'.phase with
   | .beforeField _, .fieldName => (s', evs.push .fieldStart)
   | .beforeField _, .fieldData => (s', evs.push .fieldStart)
-  | .fieldName, .fieldData => ({ s' with name := #[] }, emitIf evs s'.name .fieldName)
+  | .fieldName, .fieldData => ({ s' with name := ByteArray.empty }, emitIf evs s'.name .fieldName)
   | .fieldName, .beforeField _ =>
     let f := s'.fields.back?.getD default
-    ({ s' with fields := #[] }, (emitIf evs f.1.data .fieldName).push .fieldEnd)
+    ({ s' with fields := #[] }, (emitIf evs f.1 .fieldName).push .fieldEnd)
   | .fieldData, .beforeField _ =>
     let f := s'.fields.back?.getD default
-    ({ s' with fields := #[] }, (emitIf evs f.2.data .fieldData).push .fieldEnd)
+    ({ s' with fields := #[] }, (emitIf evs f.2 .fieldData).push .fieldEnd)
   | _, _ => (s', evs)
 
 /-- End of a chunk: report the buffered part of the field in progress. -/
 def flush (s : QsState) (evs : Array QsEvent) : QsState × Array QsEvent :=
   match s.phase with
-  | .fieldName => ({ s with name := #[] }, emitIf evs s.name .fieldName)
-  | .fieldData => ({ s with value := #[] }, emitIf evs s.value .fieldData)
+  | .fieldName => ({ s with name := ByteArray.empty }, emitIf evs s.name .fieldName)
+  | .fieldData => ({ s with value := ByteArray.empty }, emitIf evs s.value .fieldData)
   | _ => (s, evs)
 
 /-- A fresh parser: upstream's `QuerystringParser(strict_parsing=…,
@@ -102,7 +102,7 @@ and the number of bytes processed (fewer than the chunk only under
 def write (p : QuerystringParser) (chunk : ByteArray) :
     Except QuerystringParseError (QuerystringParser × Array QsEvent × Nat) :=
   let n := Qs.room p.cfg p.st chunk.size
-  let (s, evs) := (chunk.data.extract 0 n).foldl (stepEv p.cfg) (p.st, #[])
+  let (s, evs) := bytesFold (stepEv p.cfg) chunk n 0 (p.st, #[])
   let (s, evs) := flush s evs
   match s.phase with
   | .failed e => .error ⟨e, (e.offset : Int) - p.st.pos⟩
@@ -139,14 +139,14 @@ def finalizeWith {m : Type → Type} [Monad m] (p : QuerystringParser) (cb : Que
 each field from its name and data pieces. -/
 structure Collector where
   done : Array QsField := #[]
-  name : Array UInt8 := #[]
-  value : Array UInt8 := #[]
+  name : ByteArray := ByteArray.empty
+  value : ByteArray := ByteArray.empty
 
 def Collector.event (c : Collector) : QsEvent → Collector
-  | .fieldStart => { c with name := #[], value := #[] }
-  | .fieldName b => { c with name := c.name ++ b.data }
-  | .fieldData b => { c with value := c.value ++ b.data }
-  | .fieldEnd => { c with done := c.done.push (⟨c.name⟩, ⟨c.value⟩) }
+  | .fieldStart => { c with name := ByteArray.empty, value := ByteArray.empty }
+  | .fieldName b => { c with name := c.name ++ b }
+  | .fieldData b => { c with value := c.value ++ b }
+  | .fieldEnd => { c with done := c.done.push (c.name, c.value) }
   | .end => c
 
 def Collector.events (c : Collector) (evs : Array QsEvent) : Collector := evs.foldl Collector.event c

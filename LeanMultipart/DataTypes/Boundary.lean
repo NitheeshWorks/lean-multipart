@@ -48,8 +48,8 @@ def toList (b : Boundary) : Bytes := b.bytes.data.toList
 /-- The delimiter that separates parts: `CR LF - -` then the boundary. -/
 def delimL (b : Boundary) : Bytes := [Byte.CR, Byte.LF, Byte.HYPHEN, Byte.HYPHEN] ++ b.toList
 
-/-- The delimiter as an array, for indexing in the parser. -/
-def delim (b : Boundary) : Array UInt8 := b.delimL.toArray
+/-- The delimiter as a byte array. -/
+def delim (b : Boundary) : ByteArray := ⟨b.delimL.toArray⟩
 
 /-- Validate a byte string as a boundary. -/
 def ofBytes? (b : ByteArray) : Option Boundary :=

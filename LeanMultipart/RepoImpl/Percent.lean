@@ -1,4 +1,5 @@
 import LeanMultipart.DataTypes.Bytes
+import LeanMultipart.Theory.Machine
 
 /-!
 # Percent-encoding
@@ -68,13 +69,14 @@ list form.
 -/
 
 /-- One byte of `quote`. -/
-def encStep (acc : Array UInt8) (c : UInt8) : Array UInt8 :=
-  if Byte.isUnreserved c then acc.push c else acc ++ (pctTriple c).toArray
+def encStep (acc : ByteArray) (c : UInt8) : ByteArray :=
+  if Byte.isUnreserved c then acc.push c
+  else ((acc.push Byte.PERCENT).push (hexDigit (c.toNat / 16))).push (hexDigit c.toNat)
 
 /-- One byte of `quote_plus`. -/
-def encPlusStep (acc : Array UInt8) (c : UInt8) : Array UInt8 :=
+def encPlusStep (acc : ByteArray) (c : UInt8) : ByteArray :=
   if Byte.isUnreserved c then acc.push c else if c == Byte.SPACE then acc.push Byte.PLUS
-  else acc ++ (pctTriple c).toArray
+  else ((acc.push Byte.PERCENT).push (hexDigit (c.toNat / 16))).push (hexDigit c.toNat)
 
 /-- What the decoder holds back: nothing, a `%`, or `%` and one hex digit. -/
 inductive DecPending where
@@ -83,7 +85,7 @@ inductive DecPending where
   | pctHex (a : UInt8) (x : Nat)
 
 /-- One byte of `unquote_to_bytes`. -/
-def decStep : Array UInt8 × DecPending → UInt8 → Array UInt8 × DecPending
+def decStep : ByteArray × DecPending → UInt8 → ByteArray × DecPending
   | (acc, .none), c => if c == Byte.PERCENT then (acc, .pct) else (acc.push c, .none)
   | (acc, .pct), c =>
     match hexVal? c with
@@ -97,17 +99,18 @@ def decStep : Array UInt8 × DecPending → UInt8 → Array UInt8 × DecPending
       else (((acc.push Byte.PERCENT).push a).push c, .none)
 
 /-- Flush what the decoder holds back. -/
-def decFinish : Array UInt8 × DecPending → Array UInt8
+def decFinish : ByteArray × DecPending → ByteArray
   | (acc, .none) => acc
   | (acc, .pct) => acc.push Byte.PERCENT
   | (acc, .pctHex a _) => (acc.push Byte.PERCENT).push a
 
-/-! ## ByteArray wrappers -/
+/-! ## ByteArray wrappers (folds over the packed bytes) -/
 
-def percentEncode (b : ByteArray) : ByteArray := ⟨b.data.foldl encStep #[]⟩
-def quotePlus (b : ByteArray) : ByteArray := ⟨b.data.foldl encPlusStep #[]⟩
-def percentDecode (b : ByteArray) : ByteArray := ⟨decFinish (b.data.foldl decStep (#[], .none))⟩
+def percentEncode (b : ByteArray) : ByteArray := bytesFold encStep b b.size 0 (ByteArray.emptyWithCapacity b.size)
+def quotePlus (b : ByteArray) : ByteArray := bytesFold encPlusStep b b.size 0 (ByteArray.emptyWithCapacity b.size)
+def percentDecode (b : ByteArray) : ByteArray :=
+  decFinish (bytesFold decStep b b.size 0 (ByteArray.emptyWithCapacity b.size, .none))
 def unquotePlus (b : ByteArray) : ByteArray :=
-  ⟨decFinish (b.data.foldl (fun acc c => decStep acc (plusToSpace c)) (#[], .none))⟩
+  decFinish (bytesFold (fun acc c => decStep acc (plusToSpace c)) b b.size 0 (ByteArray.emptyWithCapacity b.size, .none))
 
 end LeanMultipart

@@ -27,6 +27,35 @@ def Fits (cx : Ctx) (ps : List RawPart) : Prop :=
 
 end LeanMultipart.Mp
 
+namespace LeanMultipart.Starlette
+
+/-- The invariant of the urlencoded limit machine. -/
+def UrlInv (lim : FormLimits) (s : UrlState) : Prop :=
+  s.err = none → s.inner.fields.size ≤ lim.maxFields ∧
+    (∀ f ∈ s.inner.fields.toList, f.1.size + f.2.size ≤ lim.maxPartSize) ∧
+    s.inner.name.size + s.inner.value.size ≤ lim.maxPartSize
+
+/-- Whether a part is a file (its `Content-Disposition` has a `filename`). -/
+def isFileRaw (p : RawPart) : Bool := (dispositionParams p.headers).2.isSome
+
+/-- The phase is part data. -/
+def inData (s : MState) : Bool := match s.phase with | .partData _ => true | _ => false
+
+/-- The invariant of the multipart limit machine: while no limit error has
+been raised, at most `max_files` files and `max_fields` fields have been
+counted, the parts read and the part being read are accounted for in those
+counts, and every field (read or being read) is within `max_part_size`. -/
+def MpInv (lim : FormLimits) (s : MpState) : Prop :=
+  s.err = none →
+    s.nFiles ≤ lim.maxFiles ∧ s.nFields ≤ lim.maxFields ∧
+    (∀ p ∈ s.inner.parts.toList, isFileRaw p = false → p.body.size ≤ lim.maxPartSize) ∧
+    (inData s.inner = true → s.curIsFile = (dispositionParams s.inner.headers.toList).2.isSome ∧
+      (s.curIsFile = false → s.inner.data.size ≤ lim.maxPartSize)) ∧
+    (s.inner.parts.toList.filter isFileRaw).length + (inData s.inner && s.curIsFile).toNat ≤ s.nFiles ∧
+    (s.inner.parts.toList.filter (! isFileRaw ·)).length + (inData s.inner && !s.curIsFile).toNat ≤ s.nFields
+
+end LeanMultipart.Starlette
+
 namespace LeanMultipart.Spec
 
 /-- The multipart round trip: well-formed parts, printed and followed by any
@@ -62,5 +91,20 @@ def UrlencodedWithinLimits (lim : FormLimits) (fs : List QsField) : Prop :=
 def MultipartWithinLimits (lim : FormLimits) (ps : List StarlettePart) : Prop :=
   (ps.filter (·.isFile)).length ≤ lim.maxFiles ∧ (ps.filter (! ·.isFile)).length ≤ lim.maxFields ∧
     ∀ p ∈ ps, p.isFile = false → p.data.size ≤ lim.maxPartSize
+
+/-- Starlette's streaming parsers fed any chunking give the result of one
+write of the whole body. -/
+def StarletteStreamingAgrees : Prop :=
+  (∀ (p : Starlette.UrlencodedParser) (cs : List ByteArray),
+    (cs.foldl Starlette.UrlencodedParser.write p).finalize = (p.write (concatChunks cs)).finalize) ∧
+  (∀ (p : Starlette.MultipartFormParser) (cs : List ByteArray),
+    (cs.foldl Starlette.MultipartFormParser.write p).finalize = (p.write (concatChunks cs)).finalize)
+
+/-- The limits are enforced as the bytes arrive: while no error has been
+raised, the parser's state is within `max_fields`, `max_files` and
+`max_part_size`. -/
+def StarletteBounded : Prop :=
+  (∀ lim body, Starlette.UrlInv lim ((({ lim } : Starlette.UrlencodedParser)).write body).st) ∧
+  (∀ b lim body, Starlette.MpInv lim ((Starlette.MultipartFormParser.new b lim).write body).st)
 
 end LeanMultipart.Spec

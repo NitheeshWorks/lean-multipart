@@ -1,4 +1,5 @@
 import LeanMultipart.DataTypes.Bytes
+import LeanMultipart.Theory.BytesFacts
 
 /-!
 # Byte machines
@@ -22,6 +23,46 @@ The querystring and multipart parsers are instances (`Qs.machine`,
 
 namespace LeanMultipart
 
+/-- Fold `f` over the bytes of `b` from index `i` to `stop`, reading the
+packed byte array directly (no conversion to an array of boxed bytes). -/
+def bytesFold {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (stop : Nat) (i : Nat) (s : τ) : τ :=
+  if h : i < stop ∧ i < b.size then bytesFold f b stop (i + 1) (f s b[i]) else s
+termination_by stop - i
+
+theorem bytesFold_eq {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (stop : Nat) : ∀ (n i : Nat) (s : τ),
+    stop - i = n → bytesFold f b stop i s = ((b.data.toList.drop i).take (stop - i)).foldl f s := by
+  intro n
+  induction n with
+  | zero =>
+    intro i s hn
+    unfold bytesFold
+    split
+    · omega
+    · rw [show stop - i = 0 by omega]; simp
+  | succ n ih =>
+    intro i s hn
+    unfold bytesFold
+    split
+    · rename_i h
+      rw [ih (i + 1) _ (by omega)]
+      have hl : i < b.data.toList.length := by rw [Array.length_toList]; exact h.2
+      rw [List.drop_eq_getElem_cons hl, show stop - i = (stop - (i + 1)) + 1 by omega, List.take_succ_cons]
+      simp only [List.foldl_cons, ByteArray.getElem_eq_getElem_data, Array.getElem_toList]
+    · rename_i h
+      have hi : ¬ i < b.size := fun hi => h ⟨by omega, hi⟩
+      have : b.data.toList.drop i = [] :=
+        List.drop_eq_nil_of_le (by rw [Array.length_toList]; exact Nat.le_of_not_lt hi)
+      rw [this]; simp
+
+/-- `bytesFold` from the start, up to `n` bytes, is the list fold of the first `n` bytes. -/
+theorem bytesFold_take {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (n : Nat) (s : τ) :
+    bytesFold f b n 0 s = (b.data.toList.take n).foldl f s := by
+  rw [bytesFold_eq f b n n 0 s (by omega)]; simp
+
+theorem bytesFold_full {τ : Type} (f : τ → UInt8 → τ) (b : ByteArray) (s : τ) :
+    bytesFold f b b.size 0 s = b.data.toList.foldl f s := by
+  rw [bytesFold_take, List.take_of_length_le (by rw [Array.length_toList]; exact Nat.le_refl _)]
+
 /-- A byte machine. -/
 structure Machine (σ : Type) where
   step : σ → UInt8 → σ
@@ -44,8 +85,8 @@ def room (s : σ) (n : Nat) : Nat :=
 /-- Feed bytes, truncated at the limit. -/
 def feedT (s : σ) (l : Bytes) : σ := M.feed s (l.take (M.room s l.length))
 
-/-- Feed a byte array, truncated at the limit, as an array fold. -/
-def feedA (s : σ) (b : ByteArray) : σ := (b.data.extract 0 (M.room s b.size)).foldl M.step s
+/-- Feed a byte array, truncated at the limit. -/
+def feedA (s : σ) (b : ByteArray) : σ := bytesFold M.step b (M.room s b.size) 0 s
 
 /-- Feed chunks one after another. -/
 def feedChunks (s : σ) : List Bytes → σ
@@ -68,7 +109,13 @@ theorem take_min_length (l : Bytes) (r : Nat) : l.take (min l.length r) = l.take
   · rw [Nat.min_eq_left h, List.take_of_length_le h, List.take_of_length_le (Nat.le_refl _)]
   · rw [Nat.min_eq_right (by omega)]
 
-theorem feedT_append (h : M.Counts) (s : σ) (a b : Bytes) :
+/-- The chunking theorems need the byte counter only when there is an input
+limit. -/
+def Chunkable : Prop := M.limit = none ∨ M.Counts
+
+theorem chunkable_of_counts (h : M.Counts) : M.Chunkable := Or.inr h
+
+theorem feedT_append (hc : M.Chunkable) (s : σ) (a b : Bytes) :
     M.feedT (M.feedT s a) b = M.feedT s (a ++ b) := by
   unfold feedT room
   cases hm : M.limit with
@@ -78,6 +125,7 @@ theorem feedT_append (h : M.Counts) (s : σ) (a b : Bytes) :
       List.take_of_length_le (Nat.le_refl (a ++ b).length), feed_append,
       List.take_of_length_le (Nat.le_refl a.length)]
   | some m =>
+    have h : M.Counts := hc.resolve_left (by simp [hm])
     rw [feed_pos M h, take_min_length, take_min_length, List.length_take, take_min_length,
       ← feed_append, List.take_append]
     by_cases hl : a.length ≤ m - M.pos s
@@ -90,7 +138,7 @@ theorem feedT_nil (s : σ) : M.feedT s [] = s := by
   simp only [feedT, room]; split <;> simp [feed]
 
 /-- Feeding any chunking is feeding the concatenation. -/
-theorem feedChunks_eq (h : M.Counts) (s : σ) (cs : List Bytes) :
+theorem feedChunks_eq (h : M.Chunkable) (s : σ) (cs : List Bytes) :
     M.feedChunks s cs = M.feedT s cs.flatten := by
   induction cs generalizing s with
   | nil => exact (M.feedT_nil s).symm
@@ -99,8 +147,81 @@ theorem feedChunks_eq (h : M.Counts) (s : σ) (cs : List Bytes) :
 theorem feedA_eq (s : σ) (b : ByteArray) : M.feedA s b = M.feedT s b.data.toList := by
   have hsz : b.size = b.data.toList.length := (Array.length_toList).symm
   unfold feedA feedT feed
-  rw [← Array.foldl_toList, Array.toList_extract, hsz]
-  simp only [List.extract, Nat.sub_zero, List.drop_zero]
+  rw [bytesFold_take, hsz]
+
+theorem feedA_append (h : M.Chunkable) (s : σ) (a b : ByteArray) :
+    M.feedA (M.feedA s a) b = M.feedA s (a ++ b) := by
+  rw [M.feedA_eq, M.feedA_eq, M.feedA_eq, M.feedT_append h, ByteArray.data_append, Array.toList_append]
+
+theorem feedA_empty (s : σ) : M.feedA s ByteArray.empty = s := by
+  rw [M.feedA_eq]; exact M.feedT_nil s
+
+/-- Writing chunks one after another is writing their concatenation. -/
+theorem feedA_chunks (h : M.Chunkable) (s : σ) (cs : List ByteArray) :
+    cs.foldl M.feedA s = M.feedA s (concatChunks cs) := by
+  induction cs generalizing s with
+  | nil => exact (M.feedA_empty s).symm
+  | cons c cs ih =>
+    rw [List.foldl_cons, ih, M.feedA_append h]
+    congr 1
+
+/-! ## Stopping early
+
+A machine whose halted states are fixed points can stop reading as soon as
+it halts (a limit error, a parse error, the end of the message). -/
+
+/-- `bytesFold`, stopping when `halted` holds. -/
+def bytesFoldUntil {τ : Type} (f : τ → UInt8 → τ) (halted : τ → Bool) (b : ByteArray) (stop : Nat)
+    (i : Nat) (s : τ) : τ :=
+  if halted s then s
+  else if h : i < stop ∧ i < b.size then bytesFoldUntil f halted b stop (i + 1) (f s b[i]) else s
+termination_by stop - i
+
+theorem bytesFoldUntil_eq {τ : Type} (f : τ → UInt8 → τ) (halted : τ → Bool)
+    (hfix : ∀ s c, halted s = true → f s c = s) (b : ByteArray) (stop : Nat) :
+    ∀ (n i : Nat) (s : τ), stop - i = n → bytesFoldUntil f halted b stop i s = bytesFold f b stop i s := by
+  intro n
+  induction n with
+  | zero =>
+    intro i s hn
+    unfold bytesFoldUntil bytesFold
+    split
+    · split
+      · rename_i h; omega
+      · rfl
+    · split
+      · rename_i h; omega
+      · rfl
+  | succ n ih =>
+    intro i s hn
+    by_cases hs : halted s = true
+    · -- a halted state stays put, so the full fold returns it too
+      have hfold : ∀ (k j : Nat), stop - j = k → bytesFold f b stop j s = s := by
+        intro k
+        induction k with
+        | zero =>
+          intro j hj; unfold bytesFold; split
+          · rename_i h; omega
+          · rfl
+        | succ k ihk =>
+          intro j hj; unfold bytesFold; split
+          · rw [hfix s _ hs]; exact ihk (j + 1) (by omega)
+          · rfl
+      unfold bytesFoldUntil; simp only [hs, ↓reduceIte]; exact (hfold _ i rfl).symm
+    · unfold bytesFoldUntil bytesFold
+      simp only [hs, Bool.false_eq_true, ↓reduceIte]
+      split
+      · exact ih (i + 1) _ (by omega)
+      · rfl
+
+/-- Feed a byte array, stopping when the machine halts. -/
+def feedAUntil (halted : σ → Bool) (s : σ) (b : ByteArray) : σ :=
+  bytesFoldUntil M.step halted b (M.room s b.size) 0 s
+
+theorem feedAUntil_eq {halted : σ → Bool} (hfix : ∀ s c, halted s = true → M.step s c = s)
+    (s : σ) (b : ByteArray) : M.feedAUntil halted s b = M.feedA s b := by
+  unfold feedAUntil feedA
+  exact bytesFoldUntil_eq M.step halted hfix b _ _ 0 s rfl
 
 /-! ## Forgetting buffers -/
 

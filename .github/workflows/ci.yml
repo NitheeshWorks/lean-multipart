@@ -29,6 +29,8 @@ jobs:
         run: lake exe conformance
       - name: Quickstart
         run: lake exe quickstart
+      - name: Native time and memory (50 MB bodies)
+        run: scripts/bench.sh
       - name: Traceability
         run: python3 scripts/traceability-check.py
 

@@ -80,7 +80,7 @@ def stepEv (cx : Mp.Ctx) : MState × Array MultipartEvent → UInt8 → MState �
   match ph, s'.phase with
   | .startBoundaryCR, .headerFieldStart => (s', evs.push .partBegin)
   | .headerFieldStart, .headerField => (s', evs.push .headerBegin)
-  | .headerField, .headerValueStart => (s', evs.push (.headerField ⟨s'.name⟩))
+  | .headerField, .headerValueStart => (s', evs.push (.headerField s'.name))
   | .headerValueStart, .headerValueAlmostDone =>
     (s', (emitIf evs ((s'.headers.back?.map (·.2)).getD ByteArray.empty) .headerValue).push .headerEnd)
   | .headerValue, .headerValueAlmostDone =>
@@ -96,7 +96,7 @@ def stepEv (cx : Mp.Ctx) : MState × Array MultipartEvent → UInt8 → MState �
 /-- End of a chunk: report the part data known so far. -/
 def flush (s : MState) (evs : Array MultipartEvent) : MState × Array MultipartEvent :=
   match s.phase with
-  | .partData _ => ({ s with data := #[] }, emitIf evs ⟨s.data⟩ .partData)
+  | .partData _ => ({ s with data := ByteArray.empty }, emitIf evs s.data .partData)
   | _ => (s, evs)
 
 /-- A fresh parser: upstream's `MultipartParser(boundary, max_size=…,
@@ -109,7 +109,7 @@ and the number of bytes processed, or the error. -/
 def write (p : MultipartParser) (chunk : ByteArray) :
     Except MultipartParseError (MultipartParser × Array MultipartEvent × Nat) :=
   let n := Mp.room p.cx p.st chunk.size
-  let (s, evs) := (chunk.data.extract 0 n).foldl (stepEv p.cx) (p.st, #[])
+  let (s, evs) := bytesFold (stepEv p.cx) chunk n 0 (p.st, #[])
   let (s, evs) := flush s evs
   match s.phase with
   | .failed e => .error ⟨e, (e.offset : Int) - p.st.pos⟩
@@ -137,19 +137,19 @@ each part from its header and data pieces. -/
 structure Collector where
   done : Array RawPart := #[]
   headers : Array (ByteArray × ByteArray) := #[]
-  hname : Array UInt8 := #[]
-  hvalue : Array UInt8 := #[]
-  body : Array UInt8 := #[]
+  hname : ByteArray := ByteArray.empty
+  hvalue : ByteArray := ByteArray.empty
+  body : ByteArray := ByteArray.empty
 
 def Collector.event (c : Collector) : MultipartEvent → Collector
-  | .partBegin => { c with headers := #[], body := #[] }
-  | .headerBegin => { c with hname := #[], hvalue := #[] }
-  | .headerField b => { c with hname := c.hname ++ b.data }
-  | .headerValue b => { c with hvalue := c.hvalue ++ b.data }
-  | .headerEnd => { c with headers := c.headers.push (⟨c.hname⟩, ⟨c.hvalue⟩) }
+  | .partBegin => { c with headers := #[], body := ByteArray.empty }
+  | .headerBegin => { c with hname := ByteArray.empty, hvalue := ByteArray.empty }
+  | .headerField b => { c with hname := c.hname ++ b }
+  | .headerValue b => { c with hvalue := c.hvalue ++ b }
+  | .headerEnd => { c with headers := c.headers.push (c.hname, c.hvalue) }
   | .headersFinished => c
-  | .partData b => { c with body := c.body ++ b.data }
-  | .partEnd => { c with done := c.done.push ⟨c.headers.toList, ⟨c.body⟩⟩ }
+  | .partData b => { c with body := c.body ++ b }
+  | .partEnd => { c with done := c.done.push ⟨c.headers.toList, c.body⟩ }
   | .end => c
 
 def Collector.events (c : Collector) (evs : Array MultipartEvent) : Collector := evs.foldl Collector.event c

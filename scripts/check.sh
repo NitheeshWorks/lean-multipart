@@ -26,6 +26,9 @@ lake exe conformance
 echo "== quickstart =="
 lake exe quickstart > /dev/null
 
+echo "== native time and memory =="
+scripts/bench.sh
+
 echo "== traceability =="
 python3 scripts/traceability-check.py
 

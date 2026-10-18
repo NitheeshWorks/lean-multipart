@@ -99,10 +99,10 @@ structure MState where
   pos : Nat := 0
   hdrCount : Nat := 0
   hdrSize : Nat := 0
-  name : Array UInt8 := #[]
-  value : Array UInt8 := #[]
+  name : ByteArray := ByteArray.empty
+  value : ByteArray := ByteArray.empty
   headers : Array (ByteArray × ByteArray) := #[]
-  data : Array UInt8 := #[]
+  data : ByteArray := ByteArray.empty
   parts : Array RawPart := #[]
   deriving Inhabited
 

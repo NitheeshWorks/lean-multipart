@@ -31,12 +31,12 @@ theorem feed_pos (cx : Ctx) (s : MState) (l : Bytes) :
     (feed cx s l).pos = s.pos + l.length := (machine cx).feed_pos (counts cx) s l
 
 theorem feedT_append (cx : Ctx) (s : MState) (a b : Bytes) :
-    feedT cx (feedT cx s a) b = feedT cx s (a ++ b) := (machine cx).feedT_append (counts cx) s a b
+    feedT cx (feedT cx s a) b = feedT cx s (a ++ b) := (machine cx).feedT_append ((machine cx).chunkable_of_counts (counts cx)) s a b
 
 @[simp] theorem feedT_nil (cx : Ctx) (s : MState) : feedT cx s [] = s := (machine cx).feedT_nil s
 
 theorem feedChunks_eq (cx : Ctx) (s : MState) (cs : List Bytes) :
-    feedChunks cx s cs = feedT cx s cs.flatten := (machine cx).feedChunks_eq (counts cx) s cs
+    feedChunks cx s cs = feedT cx s cs.flatten := (machine cx).feedChunks_eq ((machine cx).chunkable_of_counts (counts cx)) s cs
 
 theorem feedA_eq (cx : Ctx) (s : MState) (b : ByteArray) : feedA cx s b = feedT cx s b.data.toList :=
   (machine cx).feedA_eq s b

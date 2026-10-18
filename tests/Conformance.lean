@@ -563,6 +563,33 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
         (bs (s!"--{b}\r\nContent-Disposition: form-data; name=\"small\"\r\n\r\nsmall content\r\n--{b}\r\n" ++
           "Content-Disposition: form-data; name=\"large\"\r\n\r\n" ++ nTimes "x" (1024 * 1024 + 1) ++ s!"\r\n--{b}--\r\n"))
         == .error (.partTooLarge (1024 * 1024))) },
+  { upstream := "starlette tests/test_formparsers.py::test_urlencoded_limits_stop_parsing_within_a_single_chunk"
+    name := "starlette urlencoded stops at the first excess",
+    run := do
+      let p : Starlette.UrlencodedParser := { lim := { maxFields := 10 } }
+      let body := bs (String.intercalate "&" ((List.range 100000).map (s!"f{·}=")))
+      let p' := p.write body
+      -- stopped with the error, and only the fields up to the limit are kept
+      pure (p'.error? == some (.tooManyFields 10) && p'.st.inner.fields.size == 11) },
+  { upstream := "starlette tests/test_formparsers.py::test_urlencoded_limits_stop_parsing_within_a_single_chunk"
+    name := "starlette urlencoded field size stops early",
+    run := do
+      let p : Starlette.UrlencodedParser := { lim := { maxPartSize := 1024 } }
+      let p' := p.write (bs ("field=" ++ nTimes "x" (1024 * 50)))
+      pure (p'.error? == some (.fieldTooLarge 1024) && p'.st.inner.value.size ≤ 1025) },
+  { upstream := "starlette formparsers.py FormParser (size checked on data, count at field end)"
+    name := "starlette urlencoded: the first limit crossed is reported",
+    run := pure (starletteUrl { maxFields := 1, maxPartSize := 3 } "a=1&bbbb=2" == .error (.fieldTooLarge 3) &&
+      starletteUrl { maxFields := 1, maxPartSize := 3 } "a=1&b=2" == .error (.tooManyFields 1)) },
+  { upstream := "starlette formparsers.py MultiPartParser (counts at headers, size on data)"
+    name := "starlette multipart: the first limit crossed is reported",
+    run := pure (
+      starletteMp { maxFields := 1, maxPartSize := 3 } "multipart/form-data; boundary=B"
+        (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nxxxxx\r\n--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nx\r\n--B--\r\n")
+        == .error (.partTooLarge 3) &&
+      starletteMp { maxFields := 1, maxPartSize := 3 } "multipart/form-data; boundary=B"
+        (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nxxxxx\r\n--B--\r\n")
+        == .error (.tooManyFields 1)) },
   { upstream := "starlette tests/test_formparsers.py::test_max_part_size_exceeds_custom_limit"
     name := "starlette part too large (10KB)",
     run := pure (let b := "------------------------4K1ON9fZkj9uCUmqLHRbbR"

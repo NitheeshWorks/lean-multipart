@@ -35,12 +35,12 @@ theorem feed_pos (cfg : QsConfig) (s : QsState) (l : Bytes) :
     (feed cfg s l).pos = s.pos + l.length := (machine cfg).feed_pos (counts cfg) s l
 
 theorem feedT_append (cfg : QsConfig) (s : QsState) (a b : Bytes) :
-    feedT cfg (feedT cfg s a) b = feedT cfg s (a ++ b) := (machine cfg).feedT_append (counts cfg) s a b
+    feedT cfg (feedT cfg s a) b = feedT cfg s (a ++ b) := (machine cfg).feedT_append ((machine cfg).chunkable_of_counts (counts cfg)) s a b
 
 @[simp] theorem feedT_nil (cfg : QsConfig) (s : QsState) : feedT cfg s [] = s := (machine cfg).feedT_nil s
 
 theorem feedChunks_eq (cfg : QsConfig) (s : QsState) (cs : List Bytes) :
-    feedChunks cfg s cs = feedT cfg s cs.flatten := (machine cfg).feedChunks_eq (counts cfg) s cs
+    feedChunks cfg s cs = feedT cfg s cs.flatten := (machine cfg).feedChunks_eq ((machine cfg).chunkable_of_counts (counts cfg)) s cs
 
 theorem feedA_eq (cfg : QsConfig) (s : QsState) (b : ByteArray) : feedA cfg s b = feedT cfg s b.data.toList :=
   (machine cfg).feedA_eq s b
@@ -141,7 +141,8 @@ theorem feed_nameChars (cfg : QsConfig) (s : QsState) (l : Bytes)
     rw [hs]
     have := ih { s with pos := s.pos + 1, phase := .fieldName, name := s.name.push c } rfl
       (fun x hx => hl x (by simp [hx]))
-    simp only [Array.toList_push, List.append_assoc, List.singleton_append] at this
+    simp only [ByteArray.toList_eq, ByteArray.data_push, Array.toList_push, List.append_assoc,
+      List.singleton_append] at this ⊢
     exact this
 
 /-- Value bytes that contain no `&` accumulate. -/
@@ -158,7 +159,8 @@ theorem feed_dataChars (cfg : QsConfig) (s : QsState) (l : Bytes)
     simp only [feed, List.foldl_cons] at ih ⊢
     rw [hs]
     have := ih { s with pos := s.pos + 1, value := s.value.push c } hp (fun x hx => hl x (by simp [hx]))
-    simp only [Array.toList_push, List.append_assoc, List.singleton_append] at this
+    simp only [ByteArray.toList_eq, ByteArray.data_push, Array.toList_push, List.append_assoc,
+      List.singleton_append] at this ⊢
     exact this
 
 /-- The raw field a printed pair parses to. -/
@@ -177,7 +179,7 @@ theorem feed_encodePair (cfg : QsConfig) (s : QsState) (fs : Bool) (p : Bytes ×
   unfold encodePairL
   -- the state after the name and `=`
   obtain ⟨t, ht1, ht2, ht3, ht4, ht5⟩ : ∃ t, feed cfg s (quotePlusL p.1 ++ [Byte.EQ]) = t ∧
-      t.phase = .fieldData ∧ t.name.toList = quotePlusL p.1 ∧ t.value = #[] ∧ t.fields = s.fields := by
+      t.phase = .fieldData ∧ t.name.toList = quotePlusL p.1 ∧ t.value = ByteArray.empty ∧ t.fields = s.fields := by
     cases hq : quotePlusL p.1 with
     | nil =>
       refine ⟨_, rfl, ?_⟩
@@ -185,11 +187,11 @@ theorem feed_encodePair (cfg : QsConfig) (s : QsState) (fs : Bool) (p : Bytes ×
     | cons c cs =>
       rw [hq] at hn
       have hc := hn c (by simp)
-      have hs : step cfg s c = { s with pos := s.pos + 1, nameStart := s.pos, value := (#[] : Array UInt8), phase := .fieldName, name := #[c] } := by
+      have hs : step cfg s c = { s with pos := s.pos + 1, nameStart := s.pos, value := ByteArray.empty, phase := .fieldName, name := ByteArray.empty.push c } := by
         simp [step, hp, nameByte, hc.1, hc.2]
       refine ⟨_, rfl, ?_⟩
       simp only [feed, List.cons_append, List.foldl_cons, hs, List.foldl_append] at ⊢
-      have hm := feed_nameChars cfg { s with pos := s.pos + 1, nameStart := s.pos, value := (#[] : Array UInt8), phase := .fieldName, name := #[c] } cs rfl (fun x hx => hn x (by simp [hx]))
+      have hm := feed_nameChars cfg { s with pos := s.pos + 1, nameStart := s.pos, value := ByteArray.empty, phase := .fieldName, name := ByteArray.empty.push c } cs rfl (fun x hx => hn x (by simp [hx]))
       simp only [feed] at hm
       generalize List.foldl (step cfg) _ cs = u at hm ⊢
       obtain ⟨h1, h2, h3, h4⟩ := hm
@@ -200,17 +202,17 @@ theorem feed_encodePair (cfg : QsConfig) (s : QsState) (fs : Bool) (p : Bytes ×
   rw [feed_append, ht1]
   have := feed_dataChars cfg t (quotePlusL p.2) ht2 (fun x hx => (hv x hx).1)
   rw [ht4] at this
-  simp only [List.nil_append] at this
-  exact ⟨this.1, this.2.2.1 ▸ ht3, this.2.1, this.2.2.2.trans ht5⟩
+  simp only [ByteArray.toList_eq, ByteArray.data_empty', Array.toList_empty, List.nil_append] at this
+  exact ⟨this.1, this.2.2.1 ▸ ht3, by simpa using this.2.1, this.2.2.2.trans ht5⟩
 
-theorem array_eq_of_toList {a : Array UInt8} {l : Bytes} (h : a.toList = l) : a = l.toArray := by
-  rw [← h]
+theorem array_eq_of_toList {a : ByteArray} {l : Bytes} (h : a.toList = l) : a = ⟨l.toArray⟩ := by
+  apply ByteArray.ext; rw [← h]; simp
 
 /-! ## The urlencoded codec, as an instance of the codec theory -/
 
 /-- Between fields, with the pairs `acc` read. -/
 def Between (acc : List (Bytes × Bytes)) (s : QsState) : Prop :=
-  (∃ b, s.phase = .beforeField b) ∧ s.fields.toList = acc.map encField ∧ s.name = #[] ∧ s.value = #[]
+  (∃ b, s.phase = .beforeField b) ∧ s.fields.toList = acc.map encField ∧ s.name = ByteArray.empty ∧ s.value = ByteArray.empty
 
 /-- Inside the value of the last pair of `acc`. -/
 def InPair (acc : List (Bytes × Bytes)) (s : QsState) : Prop :=
