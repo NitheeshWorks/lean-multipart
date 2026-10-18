@@ -14,7 +14,7 @@ namespace LeanMultipart
 with `ValueError`; here the bound is a field, so such a configuration cannot
 be built. -/
 structure QsConfig where
-  strict : Bool := false
+  strictParsing : Bool := false
   maxSize : Option Nat := none
   h_maxSize : ∀ m, maxSize = some m → 0 < m := by intro m h; cases h <;> decide
 

@@ -133,9 +133,26 @@ def lookup (opts : List (Bytes × Bytes)) (k : Bytes) : Option Bytes :=
 
 end Options
 
-/-- `parse_options_header` on byte arrays. -/
-def parseOptionsHeader (b : ByteArray) : ByteArray × List (ByteArray × ByteArray) :=
-  let (v, opts) := Options.parseL b.data.toList
-  (⟨v.toArray⟩, opts.map (fun p => (⟨p.1.toArray⟩, ⟨p.2.toArray⟩)))
+/-- The parameters of a header value, as upstream's `dict`: in first-seen
+order, a repeated key keeping its last value. -/
+structure Params where
+  entries : List (ByteArray × ByteArray)
+  deriving Inhabited
+
+/-- `params.get(b"boundary")`; keys are compared as Latin-1 bytes. -/
+def Params.get (p : Params) (key : String) : Option ByteArray :=
+  (p.entries.find? (fun e => e.1.data.toList == ascii key)).map (·.2)
+
+/-- Upstream's `parse_options_header(value)`: the main value and its
+parameters.
+
+```lean
+let (ctype, params) := parseOptionsHeader "multipart/form-data; boundary=xyz".toUTF8
+params.get "boundary"   -- some "xyz"
+```
+-/
+def parseOptionsHeader (value : ByteArray) : ByteArray × Params :=
+  let (v, opts) := Options.parseL value.data.toList
+  (⟨v.toArray⟩, ⟨opts.map (fun p => (⟨p.1.toArray⟩, ⟨p.2.toArray⟩))⟩)
 
 end LeanMultipart

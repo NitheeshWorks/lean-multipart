@@ -94,7 +94,7 @@ def flush (s : QsState) (evs : Array QsEvent) : QsState × Array QsEvent :=
 max_size=…)`. `maxSize` must be at least 1, as upstream requires. -/
 def new (strictParsing : Bool := false) (maxSize : Option Nat := none)
     (h : ∀ m, maxSize = some m → 0 < m := by intro m h; cases h <;> decide) : QuerystringParser :=
-  { cfg := { strict := strictParsing, maxSize, h_maxSize := h } }
+  { cfg := { strictParsing := strictParsing, maxSize, h_maxSize := h } }
 
 /-- Upstream's `write`: feed a chunk; get the callbacks fired, as events,
 and the number of bytes processed (fewer than the chunk only under

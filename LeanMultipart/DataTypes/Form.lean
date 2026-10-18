@@ -8,7 +8,7 @@ What upstream's `FormParser` hands to its `on_field` / `on_file` callbacks,
 as data, and the limits Starlette's form parsers apply.
 
 Upstream's `File` spools to memory or a temporary file; here a file's data
-is held in memory (`FormFile.data`). The `UPLOAD_*` and
+is held in memory (`File.data`). The `UPLOAD_*` and
 `MAX_MEMORY_FILE_SIZE` options are therefore excluded (see
 `docs/traceability.toml`).
 -/
@@ -17,15 +17,15 @@ namespace LeanMultipart
 
 /-- Upstream's `Field`. `value = none` is a urlencoded field with no data
 (`foo` or `foo=`); multipart fields always have a value. -/
-structure FormField where
-  name : ByteArray
+structure Field where
+  fieldName : ByteArray
   value : Option ByteArray
   contentType : Option ByteArray := none
   deriving Inhabited
 
 /-- Upstream's `File`, held in memory. `fieldName` is `none` only for an
 `application/octet-stream` body. -/
-structure FormFile where
+structure File where
   fieldName : Option ByteArray
   fileName : Option ByteArray
   contentType : Option ByteArray := none
@@ -33,9 +33,12 @@ structure FormFile where
   data : ByteArray
   deriving Inhabited
 
+/-- Upstream's `File.size`. -/
+def File.size (f : File) : Nat := f.data.size
+
 inductive FormItem where
-  | field (f : FormField)
-  | file (f : FormFile)
+  | field (f : Field)
+  | file (f : File)
   deriving Inhabited
 
 /-- `FormParser.DEFAULT_CONFIG`, minus the file-storage options. -/
@@ -67,6 +70,8 @@ inductive FormError where
   | unknownContentType (ct : String)
   /-- "No Content-Type header given!" -/
   | noContentType
+  /-- `Content-Length` is not a non-negative integer. -/
+  | badContentLength
   /-- "Field name not found in Content-Disposition" -/
   | missingFieldName
   /-- "Unknown Content-Transfer-Encoding" (only with `errorOnBadCte`) -/

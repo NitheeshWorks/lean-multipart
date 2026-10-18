@@ -287,7 +287,7 @@ def Frame (F : List QsField) (s t : QsState) : Prop :=
   phaseNorm s.phase = phaseNorm t.phase ∧ s.name = t.name ∧ s.value = t.value ∧
     s.fields.toList = F ++ t.fields.toList
 
-theorem step_frame (cfg : QsConfig) (hs : cfg.strict = false) (F : List QsField) (s t : QsState)
+theorem step_frame (cfg : QsConfig) (hs : cfg.strictParsing = false) (F : List QsField) (s t : QsState)
     (c : UInt8) (h : Frame F s t) : Frame F (step cfg s c) (step cfg t c) := by
   obtain ⟨h1, h2, h3, h4⟩ := h
   unfold step
@@ -295,7 +295,7 @@ theorem step_frame (cfg : QsConfig) (hs : cfg.strict = false) (F : List QsField)
     simp only [nameByte, finishField, hs] <;> (repeat' split) <;>
     simp_all [Frame, phaseNorm, Array.toList_push]
 
-theorem feed_frame (cfg : QsConfig) (hs : cfg.strict = false) (F : List QsField) (s t : QsState)
+theorem feed_frame (cfg : QsConfig) (hs : cfg.strictParsing = false) (F : List QsField) (s t : QsState)
     (l : Bytes) (h : Frame F s t) : Frame F (feed cfg s l) (feed cfg t l) := by
   induction l generalizing s t with
   | nil => exact h
@@ -308,20 +308,20 @@ theorem result_frame (F : List QsField) (s t : QsState) (h : Frame F s t) :
   cases hp : s.phase <;> cases hq : t.phase <;> simp [phaseNorm, hp, hq] at h1 <;>
     simp_all [finishField, Array.toList_push, Except.map]
 
-theorem step_nonstrict (cfg : QsConfig) (hs : cfg.strict = false) (s : QsState) (c : UInt8)
+theorem step_nonstrict (cfg : QsConfig) (hs : cfg.strictParsing = false) (s : QsState) (c : UInt8)
     (h : ∀ e, s.phase ≠ .failed e) : ∀ e, (step cfg s c).phase ≠ .failed e := by
   intro e
   unfold step
   cases hp : s.phase <;> simp only [nameByte, finishField, hs] <;> (repeat' split) <;> simp_all
 
-theorem feed_nonstrict (cfg : QsConfig) (hs : cfg.strict = false) (s : QsState) (l : Bytes)
+theorem feed_nonstrict (cfg : QsConfig) (hs : cfg.strictParsing = false) (s : QsState) (l : Bytes)
     (h : ∀ e, s.phase ≠ .failed e) : ∀ e, (feed cfg s l).phase ≠ .failed e := by
   induction l generalizing s with
   | nil => exact h
   | cons c cs ih => exact ih _ (step_nonstrict cfg hs s c h)
 
 /-- The non-strict parser never fails. -/
-theorem result_nonstrict (cfg : QsConfig) (_hs : cfg.strict = false) (s : QsState)
+theorem result_nonstrict (cfg : QsConfig) (_hs : cfg.strictParsing = false) (s : QsState)
     (h : ∀ e, s.phase ≠ .failed e) : ∀ e, result s ≠ .error e := by
   intro e he
   unfold result at he

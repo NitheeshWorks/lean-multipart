@@ -226,7 +226,7 @@ def properties : List Property := [
     check := fun r => Id.run do
       let (body, r) := genFrom (asciiArr "ab=&") 20 r
       let (chunks, r) := genChunks body r
-      let cfg : QsConfig := { strict := true }
+      let cfg : QsConfig := { strictParsing := true }
       let ok : Bool := match Qs.parse cfg (toBA body), runQs cfg chunks with
         | .ok fs, .ok evs => assembleQs evs == fs.map (fun f => (f.1.data.toList, f.2.data.toList))
         | .error e1, .error e2 => e1 == e2
@@ -285,7 +285,7 @@ def properties : List Property := [
       let (ps, r) := genParts shortB r
       let body := (Mp.print shortB ps).data.toList
       let (chunks, r) := genChunks body r
-      let p := FormParser.new {} (.multipart shortB)
+      let p := FormParser.ofKind {} (.multipart shortB)
       let a := (chunks.foldl (fun p c => p.write (toBA c)) p).finalize
       let b := (p.write (toBA body)).finalize
       let same := match a, b with

@@ -11,7 +11,7 @@ import LeanMultipart.APIs.Multipart
 | `API.Starlette.parseUrlencoded lim body` | `Except LimitError {fs // Spec.UrlencodedWithinLimits lim fs}` |
 | `API.Starlette.parseMultipartForm lim contentType body` | `Except LimitError {ps // Spec.MultipartWithinLimits lim ps}` |
 
-`FormParser.new / write / finalize` and `createFormParser` are the streaming
+`FormParser.ofKind / write / finalize` and `createFormParser` are the streaming
 interface; `FormParser.write_chunks` proves any chunking equals one write.
 -/
 
@@ -24,7 +24,7 @@ def parseForm (cfg : FormParserConfig) (kind : FormKind) (body : ByteArray)
     (fileName : Option ByteArray := none) :
     {r : Except FormError (List FormItem) //
       ∀ cs : List ByteArray, FormParser.concat cs = body →
-        (cs.foldl FormParser.write (FormParser.new cfg kind fileName)).finalize = r} :=
+        (cs.foldl FormParser.write (FormParser.ofKind cfg kind fileName)).finalize = r} :=
   ⟨parseFormBody cfg kind body fileName, fun cs hcs => by
     rw [FormParser.write_chunks, hcs]; rfl⟩
 

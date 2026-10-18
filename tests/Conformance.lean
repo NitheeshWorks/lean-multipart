@@ -55,7 +55,7 @@ def formMax (n : Nat) : FormParserConfig :=
   if h : 0 < n then { maxBodySize := some n, h_maxBodySize := fun m hm => by cases hm; exact h } else {}
 
 def multipartForm (boundary : String) (cfg : FormParserConfig := {}) : FormParser :=
-  FormParser.new cfg (.multipart (bnd boundary))
+  FormParser.ofKind cfg (.multipart (bnd boundary))
 
 def feedChunks (p : FormParser) (chunks : List ByteArray) : FormParser :=
   chunks.foldl FormParser.write p
@@ -63,7 +63,7 @@ def feedChunks (p : FormParser) (chunks : List ByteArray) : FormParser :=
 /-- Does an expected item match a parsed one? -/
 def itemMatches (e : Fixtures.ExpItem) (i : FormItem) : Bool :=
   match i with
-  | .field f => !e.isFile && eqB f.name (bs e.name) && f.value.any (eqB · (unhex e.dataHex))
+  | .field f => !e.isFile && eqB f.fieldName (bs e.name) && f.value.any (eqB · (unhex e.dataHex))
   | .file f => e.isFile && f.fieldName.any (eqB · (bs e.name)) && optEqB f.fileName e.fileName &&
       optEqB f.contentType e.contentType && eqB f.data (unhex e.dataHex)
 
@@ -100,11 +100,11 @@ def qsIs (cfg : QsConfig) (chunks : List String) (exp : List (String × String))
 
 def optsIs (v : String) (ct : String) (exp : List (String × String)) : IO Bool :=
   let (t, o) := parseOptionsHeader (bs v)
-  pure (latin1Decode t == ct && o.map (fun p => (latin1Decode p.1, latin1Decode p.2)) == exp)
+  pure (latin1Decode t == ct && o.entries.map (fun p => (latin1Decode p.1, latin1Decode p.2)) == exp)
 
 def optsIsB (v : ByteArray) (ct : String) (exp : List (String × String)) : IO Bool :=
   let (t, o) := parseOptionsHeader v
-  pure (latin1Decode t == ct && o.map (fun p => (latin1Decode p.1, latin1Decode p.2)) == exp)
+  pure (latin1Decode t == ct && o.entries.map (fun p => (latin1Decode p.1, latin1Decode p.2)) == exp)
 
 def splitAll (b : ByteArray) : List (List ByteArray) :=
   (List.range (b.size - 2)).map fun i =>
@@ -118,12 +118,12 @@ def b64 (chunks : List String) : Except DecodeError ByteArray := do
 def qp (chunks : List String) : ByteArray :=
   (chunks.foldl (fun d c => d.write (bs c)) ({} : QuotedPrintableDecoder)).finalize
 
-def filesOf (r : Except FormError (List FormItem)) : List FormFile :=
+def filesOf (r : Except FormError (List FormItem)) : List File :=
   match r with
   | .ok is => is.filterMap (fun | .file f => some f | _ => none)
   | .error _ => []
 
-def fieldsOf (r : Except FormError (List FormItem)) : List FormField :=
+def fieldsOf (r : Except FormError (List FormItem)) : List Field :=
   match r with
   | .ok is => is.filterMap (fun | .field f => some f | _ => none)
   | .error _ => []
@@ -204,11 +204,11 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_strict_parsing_pass"
     name := "querystring strict pass (all splits)",
     run := pure ((splitAll (bs "foo=bar&another=asdf")).all fun cs =>
-      qsFields { strict := true } cs == .ok [("foo", "bar"), ("another", "asdf")]) },
+      qsFields { strictParsing := true } cs == .ok [("foo", "bar"), ("another", "asdf")]) },
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_strict_parsing_fail_double_sep"
     name := "querystring strict double separator (all splits)",
     run := pure ((splitAll (bs "foo=bar&&another=asdf")).all fun cs =>
-      match qsFields { strict := true } cs with
+      match qsFields { strictParsing := true } cs with
       | .error e => e.kind == .duplicateAmpersand && e.offset == 8
       | .ok _ => false) },
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_double_sep"
@@ -217,7 +217,7 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
       qsFields {} cs == .ok [("foo", "bar"), ("another", "asdf")]) },
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_strict_parsing_fail_no_value"
     name := "querystring strict no value",
-    run := pure (match qsFields { strict := true } [bs "foo=bar&blank&another=asdf"] with
+    run := pure (match qsFields { strictParsing := true } [bs "foo=bar&blank&another=asdf"] with
       | .error e => e.kind == .missingEquals && e.offset == 8 | .ok _ => false) },
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_success_no_value"
     name := "querystring no value",
@@ -258,7 +258,7 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
     name := "options ReDoS header terminates",
     run := do
       let (_, o) := parseOptionsHeader (bs ("application/x-www-form-urlencoded; !=\"" ++ nTimes "\\" 2000))
-      pure (o.any fun p => latin1Decode p.1 == "!" && (latin1Decode p.2).startsWith "\"\\") },
+      pure (o.entries.any fun p => latin1Decode p.1 == "!" && (latin1Decode p.2).startsWith "\"\\") },
   { upstream := "tests/test_multipart.py::TestParseOptionsHeader::test_ignores_rfc_2231_extended_param"
     name := "options ignores param*", run := optsIs "text/plain; param*=us-ascii'en-us'encoded%20message" "text/plain" [] },
   { upstream := "tests/test_multipart.py::TestParseOptionsHeader::test_plain_param_authoritative_over_extended"
@@ -282,6 +282,28 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
     name := "options content type case", run := optsIs "Text/Plain; a=b" "Text/Plain" [("a", "b")] },
   { upstream := "tests/test_multipart.py::TestParseOptionsHeader::test_preserves_backslash_unquoting_order"
     name := "options backslash order", run := optsIs "text/plain; q=\"a\\\\b\"" "text/plain" [("q", "a\\b")] },
+  -- OctetStreamParser
+  { upstream := "tests/test_multipart.py::TestOctetStreamParser::test_simple"
+    name := "octet stream parser simple",
+    run := pure (let (p, e1, _) := (OctetStreamParser.new).write (bs "foobar")
+      let e2 := p.finalize
+      (e1.toList.map fun | .start => "s" | .data b => latin1Decode b | .end => "e") ++
+        (e2.toList.map fun | .start => "s" | .data b => latin1Decode b | .end => "e") == ["s", "foobar", "e"]) },
+  { upstream := "tests/test_multipart.py::TestOctetStreamParser::test_multiple_chunks"
+    name := "octet stream parser chunks",
+    run := pure (Id.run do
+      let mut p := OctetStreamParser.new
+      let mut out := ""
+      for c in ["foo", "bar", "baz"] do
+        let (p', evs, _) := p.write (bs c)
+        p := p'
+        for e in evs do
+          if let .data b := e then out := out ++ latin1Decode b
+      return out == "foobarbaz") },
+  { upstream := "tests/test_multipart.py::TestOctetStreamParser::test_max_size"
+    name := "octet stream parser max size",
+    run := pure (let (_, evs, n) := (OctetStreamParser.new (maxSize := some 5)).write (bs "0123456789")
+      n == 5 && evs.toList.any (fun | .data b => latin1Decode b == "01234" | _ => false)) },
   -- Decoders
   { upstream := "tests/test_multipart.py::TestBase64Decoder::test_simple"
     name := "base64 simple", run := pure (b64 ["Zm9vYmFy"] |>.toOption |>.any (eqB · (bs "foobar"))) },
@@ -386,14 +408,14 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
       | .error (.multipart e) => e.kind == .headerSizeExceeded | _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_octet_stream"
     name := "octet stream",
-    run := pure (match (feedChunks (FormParser.new {} .octetStream (some (bs "foo.txt"))) [bs "test", bs "1234"]).finalize with
+    run := pure (match (feedChunks (FormParser.ofKind {} .octetStream (some (bs "foo.txt"))) [bs "test", bs "1234"]).finalize with
       | .ok [.file f] => eqB f.data (bs "test1234") && optEqB f.fileName (some "foo.txt") | _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_querystring"
     name := "form parser urlencoded",
     run := pure (["application/x-www-form-urlencoded", "application/x-url-encoded"].all fun ct =>
       match FormKind.select ct none with
-      | .ok k => match fieldsOf (feedChunks (FormParser.new {} k) [bs "foo=bar", bs "&test=asdf"]).finalize with
-        | [a, b] => eqB a.name (bs "foo") && a.value.any (eqB · (bs "bar")) && eqB b.name (bs "test") && b.value.any (eqB · (bs "asdf"))
+      | .ok k => match fieldsOf (feedChunks (FormParser.ofKind {} k) [bs "foo=bar", bs "&test=asdf"]).finalize with
+        | [a, b] => eqB a.fieldName (bs "foo") && a.value.any (eqB · (bs "bar")) && eqB b.fieldName (bs "test") && b.value.any (eqB · (bs "asdf"))
         | _ => false
       | .error _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_bad_content_type"
@@ -415,8 +437,8 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
       | .error .missingFieldName => true | _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_handles_None_fields"
     name := "urlencoded None fields",
-    run := pure (match fieldsOf (feedChunks (FormParser.new {} .urlencoded) [bs "foo=bar&another&baz=asdf"]).finalize with
-      | [a, b, c] => a.value.any (eqB · (bs "bar")) && b.value.isNone && eqB b.name (bs "another") && c.value.any (eqB · (bs "asdf"))
+    run := pure (match fieldsOf (feedChunks (FormParser.ofKind {} .urlencoded) [bs "foo=bar&another&baz=asdf"]).finalize with
+      | [a, b, c] => a.value.any (eqB · (bs "bar")) && b.value.isNone && eqB b.fieldName (bs "another") && c.value.any (eqB · (bs "asdf"))
       | _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_multipart_parser_preamble_before_first_boundary"
     name := "preamble skipped",
@@ -445,7 +467,7 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
       pure (match p with | .mp _ _ st => st.pos == data.size / 2 | _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_octet_stream_max_size"
     name := "octet stream max size",
-    run := pure (match (feedChunks (FormParser.new { maxBodySize := some 10 } .octetStream (some (bs "foo.txt"))) [bs "0123456789012345689"]).finalize with
+    run := pure (match (feedChunks (FormParser.ofKind { maxBodySize := some 10 } .octetStream (some (bs "foo.txt"))) [bs "0123456789012345689"]).finalize with
       | .ok [.file f] => eqB f.data (bs "0123456789") | _ => false) },
   { upstream := "tests/test_multipart.py::TestFormParser::test_boundary_too_long"
     name := "boundary length 256 / 257",
@@ -458,13 +480,22 @@ def cases : List Case := httpCases ++ singleByteCases ++ [
       pure (n == data.size && (evs.toList.filter fun | .headerBegin => true | _ => false).length == 3) },
   { upstream := "tests/test_multipart.py::TestHelperFunctions::test_create_form_parser"
     name := "create_form_parser octet stream",
-    run := pure (match createFormParser (some (bs "application/octet-stream")) with | .ok (.octet ..) => true | _ => false) },
+    run := pure (match createFormParser [("Content-Type", bs "application/octet-stream")] with | .ok (.octet ..) => true | _ => false) },
   { upstream := "tests/test_multipart.py::TestHelperFunctions::test_create_form_parser_error"
-    name := "create_form_parser without content type", run := pure (isErr (createFormParser none)) },
+    name := "create_form_parser without content type", run := pure (isErr (createFormParser [])) },
   { upstream := "tests/test_multipart.py::TestHelperFunctions::test_parse_form"
     name := "parse_form octet stream",
-    run := pure (match parseFormBody {} .octetStream (bs "123456789012345") with
-      | .ok [.file f] => f.data.size == 15 | _ => false) },
+    run := pure (match parseForm [("Content-Type", bs "application/octet-stream")] (bs "123456789012345") with
+      | .ok [.file f] => f.size == 15 | _ => false) },
+  { upstream := "tests/test_multipart.py::TestHelperFunctions::test_parse_form_content_length"
+    name := "parse_form honours Content-Length",
+    run := pure (match parseForm [("Content-Type", bs "application/octet-stream"), ("Content-Length", bs "10")]
+        (bs "123456789012345") with
+      | .ok [.file f] => f.size == 10 | _ => false) },
+  { upstream := "tests/test_multipart.py::TestHelperFunctions::test_parse_form_negative_content_length"
+    name := "parse_form rejects a negative Content-Length",
+    run := pure (isErr (parseForm [("Content-Type", bs "application/octet-stream"), ("Content-Length", bs "-1")]
+        (bs "123456789012345"))) },
   -- Starlette limits
   { upstream := "starlette tests/test_formparsers.py::test_urlencoded_too_many_fields_raise"
     name := "starlette urlencoded too many fields",

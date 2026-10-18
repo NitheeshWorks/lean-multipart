@@ -33,7 +33,7 @@ byte's offset. -/
 def nameByte (cfg : QsConfig) (s : QsState) (c : UInt8) : QsState :=
   if c == Byte.EQ then { s with phase := .fieldData }
   else if c == Byte.AMP then
-    if cfg.strict then { s with phase := .failed ⟨.missingEquals, s.nameStart⟩ }
+    if cfg.strictParsing then { s with phase := .failed ⟨.missingEquals, s.nameStart⟩ }
     else { finishField s with phase := .beforeField true }
   else { s with phase := .fieldName, name := s.name.push c }
 
@@ -46,7 +46,7 @@ def step (cfg : QsConfig) (s : QsState) (c : UInt8) : QsState :=
   | .beforeField fs =>
     if c == Byte.AMP then
       if fs then
-        if cfg.strict then { s with phase := .failed ⟨.duplicateAmpersand, p⟩ } else s
+        if cfg.strictParsing then { s with phase := .failed ⟨.duplicateAmpersand, p⟩ } else s
       else { s with phase := .beforeField true }
     else nameByte cfg { s with nameStart := p, name := #[], value := #[] } c
   | .fieldName => nameByte cfg s c

@@ -108,7 +108,7 @@ theorem inv_step (cfg : QsConfig) (W P : QsState) (C : Collector) (c : UInt8) (h
   | failed e => simp_all [Qs.step, stepEv, Collector.events]
   | beforeField fs =>
     by_cases hA : c = Byte.AMP
-    · subst hA; cases fs <;> cases hs : cfg.strict <;> simp_all [Qs.step, stepEv, Collector.events]
+    · subst hA; cases fs <;> cases hs : cfg.strictParsing <;> simp_all [Qs.step, stepEv, Collector.events]
     · by_cases hE : c = Byte.EQ
       · subst hE
         simp_all [Qs.step, Qs.nameByte, stepEv, Collector.events, Collector.event]
@@ -116,7 +116,7 @@ theorem inv_step (cfg : QsConfig) (W P : QsState) (C : Collector) (c : UInt8) (h
   | fieldName =>
     obtain ⟨h1, h2, h3⟩ := hn rfl
     by_cases hA : c = Byte.AMP
-    · subst hA; cases hs : cfg.strict
+    · subst hA; cases hs : cfg.strictParsing
       · simp_all [Qs.step, Qs.nameByte, Qs.finishField, stepEv, emitIf, Collector.events, Collector.event]
         split <;> simp_all [Collector.event] <;> (apply Array.toList_inj.1; simp_all)
       · simp_all [Qs.step, Qs.nameByte, stepEv, Collector.events]

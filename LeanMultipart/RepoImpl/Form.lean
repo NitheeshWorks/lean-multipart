@@ -73,7 +73,7 @@ def item (cfg : FormParserConfig) (p : RawPart) : Except FormError FormItem := d
     | .quotedPrintable => pure (decodeQuotedPrintable p.body)
   let ct := headerLookup p.headers (ascii "content-type")
   match file? with
-  | none => pure (.field { name := ⟨name.toArray⟩, value := some data, contentType := ct })
+  | none => pure (.field { fieldName := ⟨name.toArray⟩, value := some data, contentType := ct })
   | some fn => pure (.file { fieldName := some ⟨name.toArray⟩, fileName := some ⟨fn.toArray⟩,
                              contentType := ct, headers := p.headers, data })
 
@@ -107,7 +107,7 @@ def ofQs (r : Except QsError (List QsField)) : Except FormError (List FormItem) 
   match r with
   | .error e => .error (.querystring e)
   | .ok fs => .ok (fs.map fun f =>
-      .field { name := f.1, value := if f.2.size == 0 then none else some f.2 })
+      .field { fieldName := f.1, value := if f.2.size == 0 then none else some f.2 })
 
 def mpConfig (cfg : FormParserConfig) : MultipartConfig :=
   { maxSize := cfg.maxBodySize, maxHeaderCount := cfg.maxHeaderCount, maxHeaderSize := cfg.maxHeaderSize,
@@ -142,7 +142,8 @@ inductive FormParser where
 
 namespace FormParser
 
-def new (cfg : FormParserConfig) (kind : FormKind) (fileName : Option ByteArray := none) : FormParser :=
+/-- A parser for an already-selected kind. -/
+def ofKind (cfg : FormParserConfig) (kind : FormKind) (fileName : Option ByteArray := none) : FormParser :=
   match kind with
   | .octetStream => .octet cfg fileName #[]
   | .urlencoded => .qs cfg {}
@@ -169,21 +170,72 @@ def finalize (p : FormParser) : Except FormError (List FormItem) :=
 /-- The concatenation of chunks. -/
 abbrev concat (cs : List ByteArray) : ByteArray := concatChunks cs
 
+/-- Upstream's `FormParser(content_type, on_field, on_file, boundary=…,
+file_name=…, config=…)`; the callbacks are given to `finalizeWith`. -/
+def create (contentType : String) (boundary : Option ByteArray := none) (fileName : Option ByteArray := none)
+    (config : FormParserConfig := {}) : Except FormError FormParser :=
+  (FormKind.select contentType boundary).map (ofKind config · fileName)
+
+/-- `finalize`, calling `onField` and `onFile` for each item in order. -/
+def finalizeWith {m : Type → Type} [Monad m] (p : FormParser) (onField : Field → m Unit)
+    (onFile : File → m Unit) : m (Except FormError Unit) := do
+  match p.finalize with
+  | .error e => pure (.error e)
+  | .ok items =>
+    for i in items do
+      match i with
+      | .field f => onField f
+      | .file f => onFile f
+    pure (.ok ())
+
 end FormParser
 
 /-- The whole-buffer form parser. -/
 def parseFormBody (cfg : FormParserConfig) (kind : FormKind) (body : ByteArray)
     (fileName : Option ByteArray := none) : Except FormError (List FormItem) :=
-  ((FormParser.new cfg kind fileName).write body).finalize
+  ((FormParser.ofKind cfg kind fileName).write body).finalize
 
-/-- Upstream's `create_form_parser`: read `Content-Type` and its `boundary`. -/
-def createFormParser (contentType : Option ByteArray) (cfg : FormParserConfig := {})
+/-- Request headers, as upstream's `headers` dict (keys are matched exactly,
+as upstream's `dict.get` does). -/
+abbrev Headers := List (String × ByteArray)
+
+def Headers.get (h : Headers) (k : String) : Option ByteArray := (h.find? (·.1 == k)).map (·.2)
+
+/-- Upstream's `create_form_parser(headers, …)`: read `Content-Type` and its
+`boundary`. -/
+def createFormParser (headers : Headers) (config : FormParserConfig := {})
     (fileName : Option ByteArray := none) : Except FormError FormParser := do
-  let some ct := contentType | .error .noContentType
+  let some ct := headers.get "Content-Type" | .error .noContentType
   let (ctype, opts) := Options.parseL ct.data.toList
   let boundary := (Options.lookup opts (ascii "boundary")).map (fun b => ByteArray.mk b.toArray)
   let kind ← FormKind.select (latin1Decode ⟨ctype.toArray⟩) boundary
-  pure (FormParser.new cfg kind fileName)
+  pure (FormParser.ofKind config kind fileName)
+
+/-- Upstream's `parse_form(headers, input_stream, on_field, on_file)`: the
+fields and files of a body, reading at most `Content-Length` bytes if the
+header is present. -/
+def parseForm (headers : Headers) (body : ByteArray) (config : FormParserConfig := {}) :
+    Except FormError (List FormItem) := do
+  let p ← createFormParser headers config
+  let body ← match headers.get "Content-Length" with
+    | none => pure body
+    | some cl => match (latin1Decode cl).trimAscii.toString.toNat? with
+      | some n => pure (body.extract 0 n)
+      | none => .error .badContentLength
+  (p.write body).finalize
+
+/-- `parse_form` with upstream's `on_field` / `on_file` callbacks. -/
+def parseFormWith {m : Type → Type} [Monad m] (headers : Headers) (body : ByteArray)
+    (onField : Field → m Unit) (onFile : File → m Unit) (config : FormParserConfig := {}) :
+    m (Except FormError Unit) := do
+  match parseForm headers body config with
+  | .error e => pure (.error e)
+  | .ok items =>
+    for i in items do
+      match i with
+      | .field f => onField f
+      | .file f => onFile f
+    pure (.ok ())
 
 /-! ## Printing form parts -/
 
