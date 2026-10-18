@@ -1,5 +1,6 @@
 import LeanMultipart.RepoImpl.Querystring
 import LeanMultipart.Proofs.Percent
+import LeanMultipart.Theory.Codec
 
 /-!
 # The querystring state machine: proofs
@@ -205,32 +206,46 @@ theorem feed_encodePair (cfg : QsConfig) (s : QsState) (fs : Bool) (p : Bytes ×
 theorem array_eq_of_toList {a : Array UInt8} {l : Bytes} (h : a.toList = l) : a = l.toArray := by
   rw [← h]
 
-theorem result_of_between (s : QsState) (fs : Bool) (hp : s.phase = .beforeField fs) :
-    result s = .ok s.fields.toList := by
-  simp [result, finish, hp]
+/-! ## The urlencoded codec, as an instance of the codec theory -/
 
-/-- From between fields, a printed list of pairs parses to those pairs
-(appended to what was read before). -/
-theorem result_feed_urlencode (cfg : QsConfig) (ps : List (Bytes × Bytes)) :
-    ∀ (s : QsState) (fs : Bool), s.phase = .beforeField fs →
-      result (feed cfg s (urlencodeL ps)) = .ok (s.fields.toList ++ ps.map encField) := by
-  induction ps with
-  | nil => intro s fs hp; simpa [urlencodeL, feed] using result_of_between s fs hp
-  | cons p rest ih =>
-    intro s fs hp
-    obtain ⟨h1, h2, h3, h4⟩ := feed_encodePair cfg s fs p hp
-    generalize ht : feed cfg s (encodePairL p) = t at h1 h2 h3 h4
-    cases rest with
-    | nil =>
-      simp only [urlencodeL, ht, result, finish, h1, finishField, List.map_cons, List.map_nil]
-      simp [Array.toList_push, h4, encField, array_eq_of_toList h2, array_eq_of_toList h3]
-    | cons q rest' =>
-      have hu : urlencodeL (p :: q :: rest') = encodePairL p ++ [Byte.AMP] ++ urlencodeL (q :: rest') := rfl
-      rw [hu, feed_append, feed_append, ht]
-      have hstep : feed cfg t [Byte.AMP] = { finishField t with pos := t.pos + 1, phase := .beforeField true } := by
-        simp [feed, step, h1, finishField]
-      rw [hstep, ih _ true rfl]
-      simp [finishField, Array.toList_push, h4, encField, array_eq_of_toList h2, array_eq_of_toList h3]
+/-- Between fields, with the pairs `acc` read. -/
+def Between (acc : List (Bytes × Bytes)) (s : QsState) : Prop :=
+  (∃ b, s.phase = .beforeField b) ∧ s.fields.toList = acc.map encField ∧ s.name = #[] ∧ s.value = #[]
+
+/-- Inside the value of the last pair of `acc`. -/
+def InPair (acc : List (Bytes × Bytes)) (s : QsState) : Prop :=
+  s.phase = .fieldData ∧ (finishField s).fields.toList = acc.map encField
+
+theorem reads_pair (cfg : QsConfig) (acc : List (Bytes × Bytes)) (x : Bytes × Bytes) :
+    Reads (machine cfg) (Between acc) (encodePairL x) (InPair (acc ++ [x])) := by
+  intro s ⟨⟨b, hb⟩, hf, _, _⟩
+  obtain ⟨h1, h2, h3, h4⟩ := feed_encodePair cfg s b x hb
+  refine ⟨h1, ?_⟩
+  show (finishField (feed cfg s _)).fields.toList = _
+  simp [finishField, Array.toList_push, h4, hf, encField, array_eq_of_toList h2, array_eq_of_toList h3]
+
+theorem reads_amp (cfg : QsConfig) (ys : List (Bytes × Bytes)) :
+    Reads (machine cfg) (InPair ys) [Byte.AMP] (Between ys) := by
+  intro s ⟨hp, hf⟩
+  show Between ys (feed cfg s _)
+  have : feed cfg s [Byte.AMP] = { finishField s with pos := s.pos + 1, phase := .beforeField true } := by
+    simp [feed, step, hp, finishField]
+  rw [this]
+  exact ⟨⟨true, rfl⟩, hf, rfl, rfl⟩
+
+theorem reads_urlencode (cfg : QsConfig) (ps : List (Bytes × Bytes)) :
+    Reads (machine cfg) (Between []) (urlencodeL ps) (fun s => result s = .ok (ps.map encField)) := by
+  cases ps with
+  | nil =>
+    intro s ⟨⟨b, hb⟩, hf, _, _⟩
+    simpa [urlencodeL, Machine.feed, result, finish, hb] using hf
+  | cons p rest =>
+    have h := Reads.sepBy (I := Between) (J := InPair) encodePairL [Byte.AMP] p rest
+      (fun acc x _ => reads_pair cfg acc x) (reads_amp cfg) []
+    simp only [List.nil_append] at h
+    refine Reads.mono (fun _ h => h) ?_ h
+    intro s ⟨hp, hf⟩
+    simp [result, finish, hp, hf]
 
 /-- `room` is everything when there is no limit or the input fits. -/
 def Fits (cfg : QsConfig) (n : Nat) : Prop := ∀ m, cfg.maxSize = some m → n ≤ m
@@ -246,8 +261,8 @@ theorem feedT_fits (cfg : QsConfig) (l : Bytes) (h : Fits cfg l.length) :
 theorem parse_urlencode (cfg : QsConfig) (ps : List (Bytes × Bytes))
     (h : Fits cfg (urlencodeL ps).length) :
     parseL cfg (urlencodeL ps) = .ok (ps.map encField) := by
-  rw [parseL, feedT_fits cfg _ h, result_feed_urlencode cfg ps {} false rfl]
-  simp
+  rw [parseL, feedT_fits cfg _ h]
+  exact reads_urlencode cfg ps {} ⟨⟨false, rfl⟩, rfl, rfl, rfl⟩
 
 /-- The urlencoded round trip: decoding what `urlencode` printed gives back
 the pairs. -/
@@ -320,40 +335,19 @@ own decoding (non-strict, as Starlette uses it). -/
 theorem urlencode_urldecode_ext (ps : List (Bytes × Bytes)) (rest : Bytes) :
     urldecodeL (urlencodeL ps ++ [Byte.AMP] ++ rest) = ps ++ urldecodeL rest := by
   -- the state after the pairs and the `&`
-  obtain ⟨s1, hs1, hp1, hn1, hv1, hf1⟩ : ∃ s1, feed {} {} (urlencodeL ps ++ [Byte.AMP]) = s1 ∧
-      s1.phase = .beforeField true ∧ s1.name = #[] ∧ s1.value = #[] ∧
-      s1.fields.toList = ps.map encField := by
+  obtain ⟨s1, hs1, ⟨⟨b, hp1⟩, hf1, hn1, hv1⟩⟩ : ∃ s1, feed {} {} (urlencodeL ps ++ [Byte.AMP]) = s1 ∧
+      Between ps s1 := by
     refine ⟨_, rfl, ?_⟩
-    have key : ∀ (ps : List (Bytes × Bytes)) (s : QsState) (fs : Bool), s.phase = .beforeField fs →
-        s.name = #[] → s.value = #[] →
-        let u := feed {} s (urlencodeL ps ++ [Byte.AMP])
-        u.phase = .beforeField true ∧ u.name = #[] ∧ u.value = #[] ∧
-          u.fields.toList = s.fields.toList ++ ps.map encField := by
-      intro ps
-      induction ps with
-      | nil => intro s fs hp hn hv; cases fs <;> simp [urlencodeL, feed, step, hp, hn, hv]
-      | cons p rest ih =>
-        intro s fs hp hn hv
-        obtain ⟨h1, h2, h3, h4⟩ := feed_encodePair {} s fs p hp
-        generalize ht : feed {} s (encodePairL p) = t at h1 h2 h3 h4
-        cases rest with
-        | nil =>
-          simp only [urlencodeL, feed_append, ht]
-          simp [feed, step, h1, finishField, Array.toList_push, h4, encField,
-            array_eq_of_toList h2, array_eq_of_toList h3]
-        | cons q rest' =>
-          have hu : urlencodeL (p :: q :: rest') = encodePairL p ++ [Byte.AMP] ++ urlencodeL (q :: rest') := rfl
-          simp only
-          rw [hu, List.append_assoc, List.append_assoc, feed_append, ht, feed_append]
-          have hstep : feed {} t [Byte.AMP] = { finishField t with pos := t.pos + 1, phase := .beforeField true } := by
-            simp [feed, step, h1, finishField]
-          rw [hstep]
-          have := ih { finishField t with pos := t.pos + 1, phase := .beforeField true } true rfl rfl rfl
-          simp only at this
-          refine ⟨this.1, this.2.1, this.2.2.1, ?_⟩
-          rw [this.2.2.2]
-          simp [finishField, Array.toList_push, h4, encField, array_eq_of_toList h2, array_eq_of_toList h3]
-    simpa using key ps {} false rfl rfl rfl
+    have h0 : Between [] ({} : QsState) := ⟨⟨false, rfl⟩, rfl, rfl, rfl⟩
+    cases ps with
+    | nil =>
+      show Between [] (step {} {} Byte.AMP)
+      exact ⟨⟨true, rfl⟩, rfl, rfl, rfl⟩
+    | cons p rest =>
+      have h := Reads.sepBy (I := Between) (J := InPair) encodePairL [Byte.AMP] p rest
+        (fun acc x _ => reads_pair {} acc x) (reads_amp {}) []
+      simp only [List.nil_append] at h
+      exact (h.append (reads_amp {} _)) {} h0
   have hfr : Frame (ps.map encField) s1 {} := ⟨by simp [hp1, phaseNorm], hn1, hv1, by simp [hf1]⟩
   unfold urldecodeL
   have e1 : parseL {} (urlencodeL ps ++ [Byte.AMP] ++ rest) = result (feed {} s1 rest) := by

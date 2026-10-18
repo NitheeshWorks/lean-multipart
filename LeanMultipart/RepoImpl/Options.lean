@@ -24,13 +24,24 @@ key keeps its first position and its last value, as a Python `dict` does.
 namespace LeanMultipart
 namespace Options
 
+/-- A parameter value the quoted-string printer writes unescaped: no `"`,
+`\` or `;`. -/
+def SafeParam (l : Bytes) : Prop := ∀ c ∈ l, c ≠ Byte.DQUOTE ∧ c ≠ Byte.BSLASH ∧ c ≠ Byte.SEMI
+
+instance (l : Bytes) : Decidable (SafeParam l) := by unfold SafeParam; exact inferInstance
+
 /-- Strip Python whitespace from both ends. -/
 def strip (l : Bytes) : Bytes := ((l.dropWhile Byte.isPySpace).reverse.dropWhile Byte.isPySpace).reverse
 def lstrip (l : Bytes) : Bytes := l.dropWhile Byte.isPySpace
 def rstrip (l : Bytes) : Bytes := (l.reverse.dropWhile Byte.isPySpace).reverse
 
+/-- Split at every `;`, accumulating the current piece reversed. -/
+def splitSemiGo : Bytes → Bytes → List Bytes
+  | acc, [] => [acc.reverse]
+  | acc, c :: cs => if c == Byte.SEMI then acc.reverse :: splitSemiGo [] cs else splitSemiGo (c :: acc) cs
+
 /-- Split at every `;`. -/
-def splitSemi (l : Bytes) : List Bytes := l.splitOn Byte.SEMI
+def splitSemi (l : Bytes) : List Bytes := splitSemiGo [] l
 
 /-- `count('"') - count('\\"')`, as an integer. -/
 def quoteDiff : Bytes → Int

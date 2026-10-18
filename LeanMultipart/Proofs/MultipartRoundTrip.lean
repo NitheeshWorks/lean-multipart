@@ -1,4 +1,5 @@
 import LeanMultipart.Proofs.MultipartStream
+import LeanMultipart.Theory.Codec
 import LeanMultipart.Specifications.Multipart
 
 /-!
@@ -458,96 +459,107 @@ theorem finishPart_parts (t : MState) (p : RawPart) (P : List RawPart)
   cases p; simp only [RawPart.mk.injEq, true_and]
   apply ByteArray.ext; apply Array.ext'; simpa using hd
 
-/-- The parts after the first boundary line, up to the closing `--`. -/
-def bodyOf (b : Boundary) (p : RawPart) (rest : List RawPart) : Bytes :=
-  partL p ++ rest.flatMap (fun q => b.delimL ++ [Byte.CR, Byte.LF] ++ partL q) ++ b.delimL ++ [Byte.HYPHEN, Byte.HYPHEN]
+/-! ## The message, as an instance of the codec theory -/
 
-theorem feed_bodyOf (rest : List RawPart) : ∀ (p : RawPart) (P : List RawPart) (s : MState), PartStart P s →
-    WFPart cx p → (∀ q ∈ rest, WFPart cx q) →
-    (feed cx s (bodyOf cx.boundary p rest)).phase = .done ∧
-      (feed cx s (bodyOf cx.boundary p rest)).parts.toList = P ++ p :: rest := by
-  induction rest with
+/-- After a part and its delimiter: closing the part gives `ys`. -/
+def AfterPart (ys : List RawPart) (s : MState) : Prop :=
+  s.phase = .partData .afterD ∧ (finishPart s).parts.toList = ys
+
+/-- The closing delimiter has been read; the parts are `ys`. -/
+def Done (ys : List RawPart) (s : MState) : Prop := s.phase = .done ∧ s.parts.toList = ys
+
+/-- A part and the delimiter after it. -/
+theorem reads_part (p : RawPart) (hw : WFPart cx p) (P : List RawPart) :
+    Reads (machine cx) (PartStart P) (partL p ++ D cx) (AfterPart (P ++ [p])) := by
+  intro s hs
+  obtain ⟨h1, h2, h3, h4⟩ := feed_part cx P s hs p hw
+  exact ⟨h1, finishPart_parts _ p P h2 h3 h4⟩
+
+/-- `CR LF` after a delimiter begins the next part. -/
+theorem reads_next (ys : List RawPart) : Reads (machine cx) (AfterPart ys) [Byte.CR, Byte.LF] (PartStart ys) := by
+  intro s ⟨hp, hy⟩
+  show PartStart ys (feed cx s _)
+  rw [feed_afterD_next cx s hp]
+  have := partStart_beginPart (finishPart { s with pos := s.pos + 2 })
+  simpa [finishPart] using (show (finishPart { s with pos := s.pos + 2 }).parts.toList = ys by
+    simpa [finishPart] using hy) ▸ this
+
+/-- `--` after a delimiter ends the message. -/
+theorem reads_last (ys : List RawPart) : Reads (machine cx) (AfterPart ys) [Byte.HYPHEN, Byte.HYPHEN] (Done ys) := by
+  intro s ⟨hp, hy⟩
+  show Done ys (feed cx s _)
+  rw [feed_afterD_last cx s hp]
+  exact ⟨rfl, by simpa [finishPart] using hy⟩
+
+/-- The epilogue is ignored. -/
+theorem reads_epilogue (ys : List RawPart) (l : Bytes) : Reads (machine cx) (Done ys) l (Done ys) := by
+  intro s ⟨hp, hy⟩
+  obtain ⟨h1, h2⟩ := feed_done cx s hp l
+  exact ⟨h1, by rw [← hy]; exact congrArg _ h2⟩
+
+/-- The opening `--boundary CR LF`. -/
+theorem reads_open : Reads (machine cx) (· = {}) ((D cx).drop 2 ++ [Byte.CR, Byte.LF]) (PartStart []) := by
+  intro s hs; subst hs
+  show PartStart [] (feed cx {} _)
+  rw [feed_open cx {} rfl]
+  exact partStart_beginPart _
+
+/-- The empty message `--boundary--`. -/
+theorem reads_open_empty : Reads (machine cx) (· = {}) ((D cx).drop 2 ++ [Byte.HYPHEN, Byte.HYPHEN]) (Done []) := by
+  intro s hs; subst hs
+  obtain ⟨h1, h2⟩ := feed_open_empty cx {} rfl
+  exact ⟨h1, by show (feed cx {} _).parts.toList = []; rw [h2]⟩
+
+/-- Reading the whole message. -/
+theorem reads_message (ps : List RawPart) (hw : ∀ p ∈ ps, WFPart cx p) (epi : Bytes) :
+    Reads (machine cx) (· = {}) (printL cx.boundary ps ++ epi) (Done ps) := by
+  cases ps with
   | nil =>
-    intro p P s hs hw _
-    have e : bodyOf cx.boundary p [] = (partL p ++ D cx) ++ [Byte.HYPHEN, Byte.HYPHEN] := by simp [bodyOf]
-    rw [e, feed_append]
-    obtain ⟨h1, h2, h3, h4⟩ := feed_part cx P s hs p hw
-    rw [feed_afterD_last cx _ h1]
-    exact ⟨rfl, finishPart_parts _ p P h2 h3 h4⟩
-  | cons q rest ih =>
-    intro p P s hs hw hrest
-    have e : bodyOf cx.boundary p (q :: rest) =
-        (partL p ++ D cx) ++ [Byte.CR, Byte.LF] ++ bodyOf cx.boundary q rest := by
-      simp [bodyOf, List.append_assoc]
-    rw [e, feed_append cx s ((partL p ++ D cx) ++ [Byte.CR, Byte.LF]),
-      feed_append cx s (partL p ++ D cx) [Byte.CR, Byte.LF]]
-    obtain ⟨h1, h2, h3, h4⟩ := feed_part cx P s hs p hw
-    rw [feed_afterD_next cx _ h1]
-    have hP := finishPart_parts _ p P h2 h3 h4
-    have hst := partStart_beginPart (finishPart { feed cx s (partL p ++ D cx) with pos := (feed cx s (partL p ++ D cx)).pos + 2 })
-    rw [show (finishPart { feed cx s (partL p ++ D cx) with pos := (feed cx s (partL p ++ D cx)).pos + 2 }).parts.toList = P ++ [p] from by
-      simpa [finishPart] using hP] at hst
-    have := ih q (P ++ [p]) _ hst (hrest q (by simp)) (fun x hx => hrest x (by simp [hx]))
-    simpa using this
+    rw [printL, List.append_assoc]
+    exact reads_open_empty cx |>.append (reads_epilogue cx [] _)
+  | cons p rest =>
+    have e : printL cx.boundary (p :: rest) ++ epi =
+        ((D cx).drop 2 ++ [Byte.CR, Byte.LF]) ++
+          (((partL p ++ D cx) ++ rest.flatMap (fun q => [Byte.CR, Byte.LF] ++ (partL q ++ D cx))) ++
+            ([Byte.HYPHEN, Byte.HYPHEN] ++ ([Byte.CR, Byte.LF] ++ epi))) := by
+      simp only [printL, List.append_assoc]
+    rw [e]
+    have hparts := Reads.sepBy (I := PartStart) (J := AfterPart) (fun q => partL q ++ D cx)
+      [Byte.CR, Byte.LF] p rest (fun acc x hx => reads_part cx x (hw x hx) acc) (reads_next cx) []
+    simp only [List.nil_append] at hparts
+    exact (reads_open cx).append (hparts.append ((reads_last cx _).append (reads_epilogue cx _ _)))
 
-theorem printL_cons (p : RawPart) (rest : List RawPart) :
-    printL cx.boundary (p :: rest) = ((D cx).drop 2 ++ [Byte.CR, Byte.LF]) ++ bodyOf cx.boundary p rest ++ [Byte.CR, Byte.LF] := by
-  simp [printL, bodyOf, Boundary.delimL, List.append_assoc]
-
-theorem printL_nil : printL cx.boundary [] = ((D cx).drop 2 ++ [Byte.HYPHEN, Byte.HYPHEN]) ++ [Byte.CR, Byte.LF] := by
-  simp [printL, Boundary.delimL, List.append_assoc]
-
-/-- **The multipart round trip.** The parser reads back exactly the parts
-the printer wrote, on any continuation of the buffer (the epilogue): it
-sees the closing delimiter, reports no error and no part in progress. The
-hypotheses: each part is well formed (`WFPart`: no body contains the
-delimiter, headers are tokens and values without `CR`, within the limits),
-and the message fits `maxSize`. -/
-theorem multipart_parse_print_ext (ps : List RawPart) (epi : Bytes) (hw : ∀ p ∈ ps, WFPart cx p)
-    (hsize : ∀ m, cx.cfg.maxSize = some m → (printL cx.boundary ps).length ≤ m) :
-    (parseL cx (printL cx.boundary ps ++ epi)).parts = ps ∧
-      (parseL cx (printL cx.boundary ps ++ epi)).ended = true ∧
-      (parseL cx (printL cx.boundary ps ++ epi)).error = none ∧
-      (parseL cx (printL cx.boundary ps ++ epi)).current = none := by
-  -- truncation keeps the whole message
-  obtain ⟨epi', he⟩ : ∃ epi', feedT cx {} (printL cx.boundary ps ++ epi) =
+/-- **The multipart round trip.** Printed well-formed parts, followed by any
+epilogue, parse back to exactly those parts. `WFPart` is what the printer
+needs: no body contains the delimiter `CR LF -- boundary`, header names are
+tokens, values contain no `CR` and do not start with a space, and headers
+are within the configured limits; `Fits` is the `maxSize` limit. -/
+theorem multipart_parse_print_ext (ps : List RawPart) (epi : ByteArray) (hw : ∀ p ∈ ps, WFPart cx p)
+    (hf : Fits cx ps) : (parse cx (print cx.boundary ps ++ epi)).toExcept = .ok ps := by
+  rw [parse_eq]
+  have e : (print cx.boundary ps ++ epi).data.toList = printL cx.boundary ps ++ epi.data.toList := by
+    simp [print, ByteArray.data_append]
+  rw [e]
+  -- truncation at `maxSize` keeps the whole message
+  obtain ⟨epi', he⟩ : ∃ epi', feedT cx {} (printL cx.boundary ps ++ epi.data.toList) =
       feed cx {} (printL cx.boundary ps ++ epi') := by
     unfold feedT room
     cases hm : cx.cfg.maxSize with
     | none =>
-      refine ⟨epi, ?_⟩
+      refine ⟨epi.data.toList, ?_⟩
       simp only
       first | rfl | rw [List.take_of_length_le (Nat.le_refl _)]
     | some m =>
-      have := hsize m hm
-      refine ⟨epi.take (min ((printL cx.boundary ps) ++ epi).length (m - 0) - (printL cx.boundary ps).length), ?_⟩
+      have := hf m hm
+      refine ⟨epi.data.toList.take (min ((printL cx.boundary ps) ++ epi.data.toList).length (m - 0) -
+        (printL cx.boundary ps).length), ?_⟩
       simp only [List.take_append]
       rw [List.take_of_length_le (by simp; omega)]
-  -- the final state is `done`
-  have hdone : (feed cx {} (printL cx.boundary ps ++ epi')).phase = .done ∧
-      (feed cx {} (printL cx.boundary ps ++ epi')).parts.toList = ps := by
-    cases ps with
-    | nil =>
-      have e : printL cx.boundary [] ++ epi' = ((D cx).drop 2 ++ [Byte.HYPHEN, Byte.HYPHEN]) ++ ([Byte.CR, Byte.LF] ++ epi') := by
-        rw [printL_nil, List.append_assoc]
-      rw [e, feed_append cx {} ((D cx).drop 2 ++ [Byte.HYPHEN, Byte.HYPHEN])]
-      obtain ⟨h1, h2⟩ := feed_open_empty cx {} rfl
-      obtain ⟨h3, h4⟩ := feed_done cx _ h1 ([Byte.CR, Byte.LF] ++ epi')
-      exact ⟨h3, by rw [h4, h2]⟩
-    | cons p rest =>
-      have e : printL cx.boundary (p :: rest) ++ epi' = ((D cx).drop 2 ++ [Byte.CR, Byte.LF]) ++
-          (bodyOf cx.boundary p rest ++ ([Byte.CR, Byte.LF] ++ epi')) := by
-        rw [printL_cons]; simp only [List.append_assoc]
-      rw [e, feed_append cx {} ((D cx).drop 2 ++ [Byte.CR, Byte.LF]), feed_open cx {} rfl,
-        feed_append cx _ (bodyOf cx.boundary p rest)]
-      have := feed_bodyOf cx rest p [] _ (partStart_beginPart { ({} : MState) with pos := ({} : MState).pos + (cx.dlen - 2) + 2 }) (hw p (by simp)) (fun q hq => hw q (by simp [hq]))
-      obtain ⟨h1, h2⟩ := this
-      obtain ⟨h3, h4⟩ := feed_done cx _ h1 ([Byte.CR, Byte.LF] ++ epi')
-      exact ⟨h3, by rw [h4, h2]; rfl⟩
-  unfold parseL result
-  rw [he]
-  obtain ⟨h1, h2⟩ := hdone
-  simp [h1, h2]
+  have hd' := reads_message cx ps hw epi' {} rfl
+  simp only [parseL, result, MultipartResult.toExcept, he]
+  have h1 : (feed cx {} (printL cx.boundary ps ++ epi')).phase = .done := hd'.1
+  have h2 : (feed cx {} (printL cx.boundary ps ++ epi')).parts.toList = ps := hd'.2
+  rw [h1, h2]
 
 end Mp
 end LeanMultipart

@@ -4,6 +4,7 @@ import LeanMultipart.Proofs.MultipartRoundTrip
 import LeanMultipart.Proofs.Stream
 import LeanMultipart.Proofs.Form
 import LeanMultipart.Proofs.Wrappers
+import LeanMultipart.Proofs.Options
 import LeanMultipart.Specifications
 import LeanMultipart.APIs
 
@@ -20,37 +21,28 @@ and in `docs/traceability.toml` with `status = "tested"`.
 
 namespace LeanMultipart
 
-/-- Percent-encoding: `quote` / `unquote_to_bytes` and `quote_plus` /
-`unquote_plus` round-trip on any continuation, and the stack-safe forms
-the API runs equal the list specifications. -/
+/-- Percent-encoding: `unquote_to_bytes` undoes `quote`, and `unquote_plus`
+undoes `quote_plus`, on any continuation of the buffer. -/
 structure VerifiedPercent where
-  percentRoundTrip : Spec.PercentRoundTrip percentEncodeL percentDecodeL
-  quotePlusRoundTrip : Spec.PercentRoundTrip quotePlusL unquotePlusL
-  encodeTR : ∀ b : ByteArray, (percentEncode b).data.toList = percentEncodeL b.data.toList
-  decodeTR : ∀ b : ByteArray, (percentDecode b).data.toList = percentDecodeL b.data.toList
-  bytesRoundTrip : ∀ b : ByteArray, percentDecode (percentEncode b) = b
+  percentRoundTrip : Spec.PercentRoundTrip
+  quotePlusRoundTrip : Spec.QuotePlusRoundTrip
 
 theorem theVerifiedPercent : VerifiedPercent where
-  percentRoundTrip := percentDecode_percentEncode_ext
-  quotePlusRoundTrip := unquotePlus_quotePlus_ext
-  encodeTR := percentEncode_toList
-  decodeTR := percentDecode_toList
-  bytesRoundTrip := percentDecode_percentEncodeB
+  percentRoundTrip := percentDecode_percentEncode_extB
+  quotePlusRoundTrip := unquotePlus_quotePlus_extB
 
 /-- `application/x-www-form-urlencoded`: the round trip (plain and `_ext`),
 the streaming `QuerystringParser` gives the whole-buffer result for every
 split of the input, and totality with error localisation. -/
 structure VerifiedUrlencoded where
-  roundTrip : Spec.UrlencodeRoundTrip urlencodeL urldecodeL
-  roundTripExt : Spec.UrlencodeRoundTripExt urlencodeL urldecodeL
-  bytesRoundTrip : ∀ ps, urldecodeB (urlencodeB ps) = ps
+  roundTrip : Spec.UrlencodeRoundTrip
+  roundTripExt : Spec.UrlencodeRoundTripExt
   streaming : ∀ cfg, Spec.QsStreamingAgrees cfg
   total : ∀ cfg, Spec.QsTotal cfg
 
 theorem theVerifiedUrlencoded : VerifiedUrlencoded where
-  roundTrip := Qs.urldecode_urlencode
-  roundTripExt := Qs.urlencode_urldecode_ext
-  bytesRoundTrip := urldecodeB_urlencodeB
+  roundTrip := urldecodeB_urlencodeB
+  roundTripExt := urldecodeB_urlencodeB_ext
   streaming := QuerystringParser.parseChunks_eq
   total := Qs.parse_total
 
@@ -69,10 +61,12 @@ theorem theVerifiedMultipart : VerifiedMultipart where
   total := Mp.parse_total
   boundaryValid := API.parseBoundary_valid
 
-/-- Forms: `FormParser` fed any chunking equals one write, and Starlette's
+/-- Forms: `FormParser` fed any chunking equals one write, the
+`Content-Disposition` a part is printed with is read back, and Starlette's
 limits hold of every accepted form. -/
 structure VerifiedForm where
   streaming : Spec.FormStreamingAgrees
+  dispositionRoundTrip : Spec.DispositionRoundTrip
   urlencodedLimits : ∀ lim body fs, Starlette.parseUrlencodedRaw lim body = .ok fs →
     Spec.UrlencodedWithinLimits lim fs
   multipartLimits : ∀ lim ct body ps, Starlette.parseMultipartRaw lim ct body = .ok ps →
@@ -80,6 +74,7 @@ structure VerifiedForm where
 
 theorem theVerifiedForm : VerifiedForm where
   streaming := FormParser.write_chunks
+  dispositionRoundTrip := dispositionParams_formPart
   urlencodedLimits := Starlette.parseUrlencodedRaw_ok
   multipartLimits := Starlette.parseMultipartRaw_ok
 

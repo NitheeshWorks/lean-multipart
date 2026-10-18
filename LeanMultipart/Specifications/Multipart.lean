@@ -30,14 +30,10 @@ end LeanMultipart.Mp
 namespace LeanMultipart.Spec
 
 /-- The multipart round trip: well-formed parts, printed and followed by any
-epilogue, parse back to themselves, with the closing delimiter seen and no
-error. -/
+epilogue, parse back to exactly themselves. -/
 def MultipartRoundTrip (cx : Mp.Ctx) : Prop :=
-  ∀ (ps : List RawPart) (epi : Bytes), (∀ p ∈ ps, Mp.WFPart cx p) → Mp.Fits cx ps →
-    (Mp.parseL cx (Mp.printL cx.boundary ps ++ epi)).parts = ps ∧
-      (Mp.parseL cx (Mp.printL cx.boundary ps ++ epi)).ended = true ∧
-      (Mp.parseL cx (Mp.printL cx.boundary ps ++ epi)).error = none ∧
-      (Mp.parseL cx (Mp.printL cx.boundary ps ++ epi)).current = none
+  ∀ (ps : List RawPart) (epi : ByteArray), (∀ p ∈ ps, Mp.WFPart cx p) → Mp.Fits cx ps →
+    (Mp.parse cx (Mp.print cx.boundary ps ++ epi)).toExcept = .ok ps
 
 /-- The streaming `MultipartParser`, fed any split of the input and its
 callbacks collected, gives the whole-buffer parts (or error). -/
@@ -51,7 +47,7 @@ def MpTotal (cx : Mp.Ctx) : Prop :=
 
 /-- What `parseMultipart` promises about its result. -/
 def MpParseSpec (cx : Mp.Ctx) (body : ByteArray) (r : MultipartResult) : Prop :=
-  (∀ cs : List Bytes, cs.flatten = body.data.toList → Mp.result (Mp.feedChunks cx {} cs) = r) ∧
+  (∀ chunks : List ByteArray, concatChunks chunks = body → MultipartParser.parseChunks cx chunks = r.toExcept) ∧
     r.processed ≤ body.size ∧ ∀ e, r.error = some e → e.offset < r.processed
 
 /-- The form parser fed any chunking agrees with one write of the whole body. -/

@@ -190,13 +190,16 @@ def headerLineL (h : ByteArray × ByteArray) : Bytes :=
 def partL (p : RawPart) : Bytes :=
   p.headers.flatMap headerLineL ++ [Byte.CR, Byte.LF] ++ p.body.data.toList
 
-/-- The body of a `multipart/form-data` message with these parts. -/
+/-- The body of a `multipart/form-data` message with these parts: the
+opening `--boundary CR LF`, each part followed by the delimiter
+`CR LF --boundary` and separated by `CR LF`, then the closing `--` and
+`CR LF`. An empty message is `--boundary-- CR LF`. -/
 def printL (b : Boundary) : List RawPart → Bytes
-  | [] => [Byte.HYPHEN, Byte.HYPHEN] ++ b.toList ++ [Byte.HYPHEN, Byte.HYPHEN, Byte.CR, Byte.LF]
+  | [] => (b.delimL.drop 2 ++ [Byte.HYPHEN, Byte.HYPHEN]) ++ [Byte.CR, Byte.LF]
   | p :: rest =>
-    [Byte.HYPHEN, Byte.HYPHEN] ++ b.toList ++ [Byte.CR, Byte.LF] ++ partL p ++
-      rest.flatMap (fun q => b.delimL ++ [Byte.CR, Byte.LF] ++ partL q) ++
-      b.delimL ++ [Byte.HYPHEN, Byte.HYPHEN, Byte.CR, Byte.LF]
+    (b.delimL.drop 2 ++ [Byte.CR, Byte.LF]) ++
+      ((partL p ++ b.delimL) ++ rest.flatMap (fun q => [Byte.CR, Byte.LF] ++ (partL q ++ b.delimL))) ++
+      [Byte.HYPHEN, Byte.HYPHEN] ++ [Byte.CR, Byte.LF]
 
 def print (b : Boundary) (ps : List RawPart) : ByteArray := ⟨(printL b ps).toArray⟩
 

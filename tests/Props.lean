@@ -269,7 +269,7 @@ def properties : List Property := [
         | .error e, some e' => e == e'
         | _, _ => false
       return (bif ok then none else some s!"{showB body} chunks {chunks}", r) },
-  { name := "tested Content-Disposition name/filename round trip (safe names)"
+  { name := "smoke dispositionParams_formPart (safe names)"
     check := fun r => Id.run do
       let alpha := asciiArr "aZ09 _-.()=,é:/"
       let (n, r) := genFrom alpha 10 r

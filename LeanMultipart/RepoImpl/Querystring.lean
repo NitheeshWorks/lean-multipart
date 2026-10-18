@@ -112,8 +112,7 @@ def encodePairL (p : Bytes × Bytes) : Bytes := quotePlusL p.1 ++ [Byte.EQ] ++ q
 /-- `urllib.parse.urlencode` on byte pairs: pairs joined by `&`. -/
 def urlencodeL : List (Bytes × Bytes) → Bytes
   | [] => []
-  | [p] => encodePairL p
-  | p :: ps => encodePairL p ++ [Byte.AMP] ++ urlencodeL ps
+  | p :: ps => encodePairL p ++ ps.flatMap (fun q => [Byte.AMP] ++ encodePairL q)
 
 /-- Decode a body: the non-strict parser, then `unquote_plus` on each name
 and value. Total: the non-strict parser has no error case. -/

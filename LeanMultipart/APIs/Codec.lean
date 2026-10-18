@@ -1,5 +1,6 @@
 import LeanMultipart.Specifications.Codec
 import LeanMultipart.Proofs.Wrappers
+import LeanMultipart.Proofs.Stream
 
 /-!
 # API: percent-encoding and urlencoded forms
@@ -50,7 +51,7 @@ def parseQuerystring (cfg : QsConfig) (body : ByteArray) :
     {r : Except QsError (List QsField) // Spec.QsParseSpec cfg body r} :=
   ⟨Qs.parse cfg body, by
     refine ⟨fun cs hcs => ?_, fun e he => ?_⟩
-    · rw [Qs.parse_chunks, hcs, Qs.parse_eq]
+    · rw [QuerystringParser.parseChunks_eq, hcs]
     · rw [Qs.parse_eq] at he
       have ⟨h1, h2⟩ := Qs.parse_total cfg body.data.toList
       have := h2 e he

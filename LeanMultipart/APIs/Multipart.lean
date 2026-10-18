@@ -1,5 +1,6 @@
 import LeanMultipart.Specifications.Multipart
 import LeanMultipart.Proofs.Wrappers
+import LeanMultipart.Proofs.Stream
 import LeanMultipart.Proofs.MultipartRoundTrip
 
 /-!
@@ -52,9 +53,9 @@ offset lies in the processed bytes. -/
 def parseMultipart (b : Boundary) (cfg : MultipartConfig) (body : ByteArray) :
     {r : MultipartResult // Spec.MpParseSpec ⟨b, cfg⟩ body r} :=
   ⟨Mp.parse ⟨b, cfg⟩ body, by
+    refine ⟨fun cs hcs => by rw [MultipartParser.parseChunks_eq, hcs], ?_,
+      by rw [Mp.parse_eq]; exact fun e he => (Mp.parse_total ⟨b, cfg⟩ body.data.toList).2 e he⟩
     rw [Mp.parse_eq]
-    refine ⟨fun cs hcs => ?_, ?_, fun e he => (Mp.parse_total ⟨b, cfg⟩ body.data.toList).2 e he⟩
-    · rw [Mp.parse_chunks, hcs]
     · have h1 := (Mp.parse_total ⟨b, cfg⟩ body.data.toList).1
       have hr : Mp.room ⟨b, cfg⟩ {} body.data.toList.length ≤ body.data.toList.length := by
         unfold Mp.room; split <;> omega
@@ -77,8 +78,7 @@ namespace API
 /-- What the multipart printer promises: the parser reads back exactly
 these parts, whatever follows (the epilogue). -/
 def PrintSpec (cx : Mp.Ctx) (ps : List RawPart) (body : ByteArray) : Prop :=
-  ∀ epi : ByteArray, (Mp.parse cx (body ++ epi)).parts = ps ∧ (Mp.parse cx (body ++ epi)).ended = true ∧
-    (Mp.parse cx (body ++ epi)).error = none ∧ (Mp.parse cx (body ++ epi)).current = none
+  ∀ epi : ByteArray, (Mp.parse cx (body ++ epi)).toExcept = .ok ps
 
 instance (cx : Mp.Ctx) (ps : List RawPart) : Decidable (Mp.Fits cx ps) := by
   unfold Mp.Fits
@@ -95,12 +95,7 @@ the header limits) and the message fits `maxSize`. Postcondition: the
 round trip. -/
 def printMultipart (cx : Mp.Ctx) (ps : List RawPart) (hw : ∀ p ∈ ps, Mp.WFPart cx p) (hf : Mp.Fits cx ps) :
     {body : ByteArray // PrintSpec cx ps body} :=
-  ⟨Mp.print cx.boundary ps, fun epi => by
-    have := Mp.multipart_parse_print_ext cx ps epi.data.toList hw hf
-    have e : (Mp.print cx.boundary ps ++ epi).data.toList = Mp.printL cx.boundary ps ++ epi.data.toList := by
-      simp [Mp.print, ByteArray.data_append]
-    simp only [Mp.parse_eq, e]
-    exact this⟩
+  ⟨Mp.print cx.boundary ps, fun epi => Mp.multipart_parse_print_ext cx ps epi hw hf⟩
 
 /-- Why `printMultipart?` refused. -/
 inductive PrintError where
