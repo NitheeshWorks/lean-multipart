@@ -66,13 +66,14 @@ Latin-1), repeated, as `tests/upstream/urlencoded_speed.py` builds them. -/
 def qsValue (kind : String) (mib : Nat) : ByteArray :=
   let unit := match kind with
     | "escaped" => u "%41" | "mixed" => u "ab+c%20" | "plus" => u "hello+world" | "latin" => u "café"
+    | "fox" => u "the+quick+brown+fox+jumps+over+the+lazy+dog+" | "iam" => u "I+am+a+man+"
     | _ => u "x"
   let n := mib * mb
   (build [.bytes (u "a="), .rep unit (n / unit.size + 1)]).extract 0 (n + 2)
 
 def qsCases : List (String × String × Nat) :=
   (["plain", "escaped", "mixed"].flatMap fun k => [1, 10, 50].map fun m => (s!"qs-{k}-{m}", k, m)) ++
-  (["plus", "latin"].flatMap fun k => [1, 10].map fun m => (s!"qs-{k}-{m}", k, m))
+  (["plus", "latin", "fox", "iam"].flatMap fun k => [1, 10].map fun m => (s!"qs-{k}-{m}", k, m))
 
 /-- A field name of `mib` MiB of `unit` repeated, then `=1`. -/
 def repName (unit : String) (mib : Nat) : ByteArray :=
@@ -106,6 +107,10 @@ def body : String → ByteArray
   | "name-over" => build [.fill 120 (mb + 1), .bytes (u "=1")]
   | "name-pw-1" => repName "hello+world" 1
   | "name-pw-2" => repName "hello+world" 2
+  | "name-fox-1" => repName "the+quick+brown+fox+jumps+over+the+lazy+dog+" 1
+  | "name-fox-2" => repName "the+quick+brown+fox+jumps+over+the+lazy+dog+" 2
+  | "name-a-1" => repName "a+" 1
+  | "name-a-2" => repName "a+" 2
   | "name-plus-1" => plusName 1
   | "name-plus-10" => plusName 10
   | c => match qsCases.find? (·.1 == c) with
@@ -135,11 +140,13 @@ def run (c : String) (b : ByteArray) : String :=
   | "percent50" => s!"{(percentDecode (percentEncode b)).size == b.size}"
   | "options" => s!"{(parseOptionsHeader b).2.entries.length} params"
   | "qs-plain-1" | "qs-plain-10" | "qs-plain-50" | "qs-escaped-1" | "qs-escaped-10" | "qs-escaped-50"
-  | "qs-mixed-1" | "qs-mixed-10" | "qs-mixed-50" | "qs-plus-1" | "qs-plus-10" | "qs-latin-1" | "qs-latin-10" =>
+  | "qs-mixed-1" | "qs-mixed-10" | "qs-mixed-50" | "qs-plus-1" | "qs-plus-10" | "qs-latin-1" | "qs-latin-10"
+  | "qs-fox-1" | "qs-fox-10" | "qs-iam-1" | "qs-iam-10" =>
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.2.length)).foldl (· + ·) 0} chars"
-  | "name-1" | "name-2" | "name-4" | "name-pw-1" | "name-pw-2" | "name-plus-1" | "name-plus-10" =>
+  | "name-1" | "name-2" | "name-4" | "name-pw-1" | "name-pw-2" | "name-plus-1" | "name-plus-10"
+  | "name-fox-1" | "name-fox-2" | "name-a-1" | "name-a-2" =>
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.1.length)).foldl (· + ·) 0} name chars"
@@ -167,19 +174,26 @@ def bounds : String → Nat × Nat
   -- Starlette's urlencoded parse and decode against python-multipart 0.0.32 +
   -- unquote_plus (tests/upstream/urlencoded_speed.py), held to 2×. Each reference
   -- is the least of three invocations' best of 5 warm runs (best of 15).
-  -- Values of 1/10/50 MiB: plain 0.43/7.66/93.0 ms, escaped 102/1068/5298,
-  -- mixed 53.4/558/3025; `hello+world` values of 1/10 MiB: 0.96/15.5.
-  | "qs-plain-1" => (860, 3) | "qs-plain-10" => (15320, 3) | "qs-plain-50" => (185900, 3)
-  | "qs-escaped-1" => (204120, 3) | "qs-escaped-10" => (2136840, 3) | "qs-escaped-50" => (10596000, 3)
-  | "qs-mixed-1" => (106800, 3) | "qs-mixed-10" => (1116520, 3) | "qs-mixed-50" => (6049280, 3)
-  | "qs-plus-1" => (1920, 3) | "qs-plus-10" => (31000, 3)
+  -- Values of 1/10/50 MiB: plain 0.45/8.02/100 ms, escaped 105/1069/5417,
+  -- mixed 54.4/567/3097; values of 1/10 MiB of `hello+world` 1.05/14.1, of
+  -- `the+quick+brown+fox+jumps+over+the+lazy+dog+` 0.85/14.0, of `I+am+a+man+`
+  -- 0.87/14.2.
+  | "qs-plain-1" => (900, 3) | "qs-plain-10" => (16040, 3) | "qs-plain-50" => (200760, 3)
+  | "qs-escaped-1" => (209720, 3) | "qs-escaped-10" => (2137620, 3) | "qs-escaped-50" => (10834180, 3)
+  | "qs-mixed-1" => (108700, 3) | "qs-mixed-10" => (1133980, 3) | "qs-mixed-50" => (6194380, 3)
+  | "qs-plus-1" => (2100, 3) | "qs-plus-10" => (28140, 3)
+  | "qs-fox-1" => (1700, 3) | "qs-fox-10" => (28020, 3)
+  | "qs-iam-1" => (1740, 3) | "qs-iam-10" => (28460, 3)
   | "cl10m" | "cl10mx" => (1000000, 3)
-  -- names: plain `x` of 1/2/4 MiB 0.53/0.87/2.44 ms, `hello+world` of 1/2 MiB
-  -- 0.93/1.93; Starlette 1.8.0 refusing a 1 MiB + 1 name at its defaults 0.54
-  | "name-1" => (1060, 3) | "name-2" => (1740, 3) | "name-4" => (4880, 3)
-  | "name-pw-1" => (1860, 3) | "name-pw-2" => (3860, 3) | "name-over" => (1080, 3)
+  -- names: plain `x` of 1/2/4 MiB 0.34/0.73/1.78 ms; of 1/2 MiB of `hello+world`
+  -- 0.82/1.73, of the fox sentence 0.86/1.81, of `a+` 0.90/1.91; Starlette
+  -- 1.8.0 refusing a 1 MiB + 1 name at its defaults 0.49
+  | "name-1" => (680, 3) | "name-2" => (1460, 3) | "name-4" => (3560, 3)
+  | "name-pw-1" => (1640, 3) | "name-pw-2" => (3460, 3)
+  | "name-fox-1" => (1720, 3) | "name-fox-2" => (3620, 3)
+  | "name-a-1" => (1800, 3) | "name-a-2" => (3820, 3) | "name-over" => (980, 3)
   -- Raw bytes ≥ 0x80 without `%` (`café` values, `hello+café` names; Python
-  -- 0.37/6.52 and 0.87/13.0 ms at 1/10 MiB) are a documented gap
+  -- 0.27/6.49 and 0.78/12.8 ms at 1/10 MiB) are a documented gap
   -- (traceability starlette.decode.nonascii-speed): Python's Latin-1 str is a
   -- copy of the bytes, while each such byte here becomes two UTF-8 bytes,
   -- written one at a time, and the runtime then copies and measures the result
@@ -205,7 +219,7 @@ def main (args : List String) : IO UInt32 := do
   -- Each run gets a freshly built body that it owns, as a server's parser
   -- does; the case name is read back from a ref, so the compiler cannot hoist
   -- the (pure) build and parse out of the loop. The peak memory is read after
-  -- the first run. The time is the best of up to 31 runs (fewer once 2 s
+  -- the first run. The time is the best of up to 101 runs (fewer once 2 s
   -- have been spent); the Python references are the best of 15
   -- warm runs (three invocations of best of 5).
   let name ← IO.mkRef c
@@ -214,7 +228,7 @@ def main (args : List String) : IO UInt32 := do
   let mut outcome := ""
   let mut peak := 0
   let mut size := 0
-  for k in [0:31] do
+  for k in [0:101] do
     if k > 0 && spent > 2000000000 then break
     let input := body (← name.get)
     if k == 0 then IO.println s!"{c} built {input.size} bytes"

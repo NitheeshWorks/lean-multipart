@@ -158,6 +158,25 @@ decreasing_by
     exact Nat.mod_eq_of_lt (by have := stop.toNat_lt_two_pow_numBits; omega)
   omega
 
+/-- A `+` as a space, any other byte as itself (a conditional move, not a branch). -/
+@[inline] def plusByte (c : UInt8) : UInt8 := if c == Byte.PLUS then 0x20 else c
+
+/-- Nonzero exactly for `%` or a byte `≥ 0x80`, without branches. -/
+@[inline] def pctHighFlag (c : UInt8) : UInt8 := (c >>> 7) ||| (c == Byte.PERCENT).toUInt8
+
+/-- `acc` or-ed with `pctHighFlag` of every byte of `b[i, stop)`, as `specialAny`. -/
+def pctHighAny (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) (i : USize) (acc : UInt8) : UInt8 :=
+  if h : i < stop then
+    pctHighAny b stop hs (i + 1) (acc ||| pctHighFlag (b.uget i (by rw [USize.lt_iff_toNat_lt] at h; omega)))
+  else acc
+termination_by stop.toNat - i.toNat
+decreasing_by
+  rw [USize.lt_iff_toNat_lt] at h
+  have : (i + 1).toNat = i.toNat + 1 := by
+    rw [USize.toNat_add]; simp only [USize.toNat_one]
+    exact Nat.mod_eq_of_lt (by have := stop.toNat_lt_two_pow_numBits; omega)
+  omega
+
 /-! ## Runs without `%`
 
 Outside an escape and a UTF-8 sequence, every byte but `%` is a literal: `+`
@@ -247,6 +266,57 @@ def fillB (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) (i j : USi
   else out
 termination_by stop.toNat - i.toNat
 decreasing_by all_goals omega
+
+/-- `b` with the byte at `i` mapped by `plusByte`, in place. -/
+@[inline] def plusAt (b : ByteArray) (i : USize) (h : i.toNat < b.size) : ByteArray :=
+  b.uset i (plusByte (b.uget i h)) h
+
+theorem size_plusAt (b : ByteArray) (i : USize) (h : i.toNat < b.size) : (plusAt b i h).size = b.size :=
+  size_uset' b i _ h
+
+/-- `b` with every byte from `i` on mapped by `plusByte`, one at a time. -/
+def plusTail (b : ByteArray) (stop : USize) (hs : stop.toNat = b.size) (i : USize) : ByteArray :=
+  if h : i < stop then
+    have hi : i.toNat < b.size := by rw [USize.lt_iff_toNat_lt] at h; omega
+    plusTail (plusAt b i hi) stop (by rw [size_plusAt]; exact hs) (i + 1)
+  else b
+termination_by stop.toNat - i.toNat
+decreasing_by
+  rw [USize.lt_iff_toNat_lt] at h
+  have : (i + 1).toNat = i.toNat + 1 := by
+    rw [USize.toNat_add]; simp only [USize.toNat_one]
+    exact Nat.mod_eq_of_lt (by have := stop.toNat_lt_two_pow_numBits; omega)
+  omega
+
+/-- `b` with every byte from `i` on mapped by `plusByte`, in place, four at
+a time: the same work for every byte, however many are `+`. -/
+def plusMap (b : ByteArray) (stop : USize) (hs : stop.toNat = b.size) (i : USize)
+    (hi : i.toNat ≤ stop.toNat) : ByteArray :=
+  if h : 4 ≤ stop - i then
+    have h4 : i.toNat + 4 ≤ stop.toNat := by
+      rw [USize.le_iff_toNat_le, USize.toNat_sub_of_le _ _ (USize.le_iff_toNat_le.mpr hi)] at h
+      simp at h; omega
+    have hlt := stop.toNat_lt_two_pow_numBits
+    have hU : USize.size = 2 ^ System.Platform.numBits := rfl
+    have e1 : (i + 1).toNat = i.toNat + 1 := usize_add_toNat i 1 (by omega)
+    have e2 : (i + 2).toNat = i.toNat + 2 := usize_add_toNat i 2 (by omega)
+    have e3 : (i + 3).toNat = i.toNat + 3 := usize_add_toNat i 3 (by omega)
+    have e4 : (i + 4).toNat = i.toNat + 4 := usize_add_toNat i 4 (by omega)
+    let b1 := plusAt b i (by omega)
+    let b2 := plusAt b1 (i + 1) (by simp only [b1, size_plusAt]; omega)
+    let b3 := plusAt b2 (i + 2) (by simp only [b2, b1, size_plusAt]; omega)
+    let b4 := plusAt b3 (i + 3) (by simp only [b3, b2, b1, size_plusAt]; omega)
+    plusMap b4 stop (by simp only [b4, b3, b2, b1, size_plusAt]; exact hs) (i + 4) (by omega)
+  else plusTail b stop hs i
+termination_by stop.toNat - i.toNat
+decreasing_by
+  have := usize_add_toNat i 4 (by
+    rw [USize.le_iff_toNat_le, USize.toNat_sub_of_le _ _ (USize.le_iff_toNat_le.mpr hi)] at h
+    simp at h; have := stop.toNat_lt_two_pow_numBits; have hU : USize.size = 2 ^ System.Platform.numBits := rfl; omega)
+  rw [USize.le_iff_toNat_le, USize.toNat_sub_of_le _ _ (USize.le_iff_toNat_le.mpr hi)] at h
+  simp at h
+  simp only [USize.ofNat] at this
+  omega
 
 /-- A byte `fillA` stops at: `+`, or one `≥ 0x80`. -/
 @[inline] def litStop (c : UInt8) : Bool := 0x80 ≤ c || c == Byte.PLUS

@@ -84,7 +84,11 @@ The machine is generic in its output (`Sink`); run into a `ByteArray` of
 UTF-8 with each run without `%` taken at once (`litSpan`, `litBulk`), it is
 `unquotePlusLatin1Fast`. A field with no `%`, `+` or byte `≥ 0x80` is its own UTF-8; that is found by
 or-ing a branch-free flag over every byte (`specialAny`, which the C compiler
-vectorises; `specialAny_plain`). Otherwise a run is copied to the output, which is right until
+vectorises; `specialAny_plain`). A field with `+` but no `%` and no byte `≥ 0x80`
+(`pctHighAny`, the same kind of pass) has each byte mapped in place, `+` to a
+space, four bytes per step with a conditional move (`plusMap`,
+`pctHighAny_plus`), so its cost per byte does not depend on how many are `+`.
+Otherwise a run is copied to the output, which is right until
 its first `+` or byte `≥ 0x80`; `fillA` overwrites each `+` with a space in
 place, and from the first byte `≥ 0x80` on, `countHigh` sizes the output
 exactly and `fillB` writes each byte's UTF-8 at its place. Their writes carry

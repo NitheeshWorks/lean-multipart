@@ -170,7 +170,7 @@ What is tested rather than proved, and every deviation from upstream, is in
 
 `scripts/bench.sh` (run in CI) builds each body natively and checks time and
 peak memory against the bounds in `tests/Bench.lean`; the peak includes the
-body itself; times are the best of up to 31 warm runs, and the Python
+body itself; times are the best of up to 101 warm runs, and the Python
 references (`tests/upstream/urlencoded_speed.py`) the best of 15 warm runs on
 the same machine. Starlette takes 73 to 109 ms and about 121 MB when a limit stops
 a 50 MB body, and 455 ms to parse a whole 50 MB file part.
@@ -182,13 +182,13 @@ a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 | 1,000,000 tiny parts (58 MB) | `tooManyFields` | 9 ms | 68 MB |
 | 1,000,000 `a=b&` (4 MB) | `tooManyFields` | < 1 ms | 13 MB |
 | a 10 MB `Content-Length` value | refused (Python's 4300-digit limit) | 230 ms | 22 MB |
-| a 1 / 2 / 4 MiB field name, parsed and decoded | plain | 0.65 / 1.35 / 2.94 ms (python-multipart + `unquote_plus`: 0.53 / 0.87 / 2.44) | 13 / 18 / 24 MB |
-| a 1 / 2 MiB field name of `hello+world` | decoded | 1.13 / 2.36 ms (python-multipart + `unquote_plus`: 0.93 / 1.93) | 16 / 20 MB |
-| a 1 MiB + 1 field name at the default limits | `fieldTooLarge` | 0.15 ms (Starlette: 0.54 ms) | 11 MB |
-| `a=` + 10 MiB value, parsed and decoded (`parseUrlencodedForm`) | plain / escaped / mixed | 9.7 / 409 / 287 ms (python-multipart + `unquote_plus`: 7.7 / 1068 / 558) | 54 MB |
-| `a=` + 1 / 10 MiB of `hello+world` | decoded | 1.07 / 14.5 ms (python-multipart + `unquote_plus`: 0.96 / 15.5) | 13 / 54 MB |
-| `a=` + 1 / 10 MiB of raw UTF-8 `café` | decoded | 2.4 / 28.0 ms (python-multipart + `unquote_plus`: 0.37 / 6.52) | 13 / 71 MB |
-| a 1 / 10 MiB field name of `hello+café` | decoded | 2.4 / 31.3 ms (python-multipart + `unquote_plus`: 0.87 / 13.0) | 18 / 69 MB |
+| a 1 / 2 / 4 MiB field name, parsed and decoded | plain | 0.65 / 1.35 / 2.84 ms (python-multipart + `unquote_plus`: 0.34 / 0.73 / 1.78) | 13 / 18 / 24 MB |
+| a 1 / 2 MiB field name of `hello+world` / of `the+quick+brown+fox+jumps+over+the+lazy+dog+` / of `a+` | decoded | 1.32 / 2.72, 1.31 / 2.71, 1.32 / 2.70 ms (python-multipart + `unquote_plus`: 0.82 / 1.73, 0.86 / 1.81, 0.90 / 1.91) | 16 / 20 MB |
+| a 1 MiB + 1 field name at the default limits | `fieldTooLarge` | 0.09 ms (Starlette: 0.49 ms) | 11 MB |
+| `a=` + 10 MiB value, parsed and decoded (`parseUrlencodedForm`) | plain / escaped / mixed | 7.1 / 413 / 287 ms (python-multipart + `unquote_plus`: 8.0 / 1069 / 567) | 54 MB |
+| `a=` + 1 / 10 MiB of `hello+world` / of the fox sentence / of `I+am+a+man+` | decoded | 1.25 / 14.2, 1.25 / 14.6, 1.26 / 14.3 ms (python-multipart + `unquote_plus`: 1.05 / 14.1, 0.85 / 14.0, 0.87 / 14.2) | 13 / 54 MB |
+| `a=` + 1 / 10 MiB of raw UTF-8 `café` | decoded | 2.5 / 28.0 ms (python-multipart + `unquote_plus`: 0.27 / 6.49) | 13 / 71 MB |
+| a 1 / 10 MiB field name of `hello+café` | decoded | 2.5 / 32.3 ms (python-multipart + `unquote_plus`: 0.78 / 12.8) | 18 / 69 MB |
 | 50 MB file part, whole body | parsed | 150 ms | 115 MB |
 | 50 MB random binary file part, whole body | parsed | 260 ms | 220 MB |
 | 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 150 ms | 68 MB |
@@ -196,8 +196,8 @@ a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 Raw bytes `≥ 0x80` cost more here than in Python: CPython's Latin-1 string is
 a copy of the bytes, while a Lean `String` is UTF-8, so each such byte is
 written as two bytes, and the runtime copies and measures the result to make
-the `String`; those rows run at 2.4-6.5× Python, where `+` and `%XY` run within
-2×.
+the `String`; those rows run at 2.5-9× Python, where `+` and `%XY` run within
+2×; a field with `+` but no `%` costs the same per byte however many `+` it has.
 
 Parsers read the packed bytes directly and keep their buffers in
 `ByteArray`; the limit parsers stop reading at the first error. Inside part

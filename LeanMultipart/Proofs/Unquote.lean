@@ -535,6 +535,162 @@ theorem specialAny_plain (raw : ByteArray) (hw : raw.size < USize.size)
   intro x hx; apply this x
   unfold lits; rw [USize.toNat_zero, Nat.sub_zero, List.drop_zero, List.take_of_length_le (by simp)]; exact hx
 
+theorem pctHighFlag_zero (c : UInt8) (h : pctHighFlag c = 0) : c < 0x80 ∧ c ≠ Byte.PERCENT := by
+  have tb : ∀ b : Bool, b.toUInt8 = 0 → b = false := by decide
+  simp only [pctHighFlag, UInt8.or_eq_zero_iff] at h
+  obtain ⟨h1, h2⟩ := h
+  have hc : c.toNat < 128 := by
+    have := congrArg UInt8.toNat h1
+    rw [UInt8.toNat_shiftRight, Nat.shiftRight_eq_div_pow] at this
+    simp at this; omega
+  refine ⟨UInt8.lt_iff_toNat_lt.mpr (by simpa using hc), ?_⟩
+  have := tb _ h2; simpa using this
+
+theorem pctHighAny_zero (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) :
+    ∀ (n : Nat) (i : USize) (acc : UInt8), stop.toNat - i.toNat = n → pctHighAny b stop hs i acc = 0 →
+      acc = 0 ∧ ∀ x ∈ lits b i.toNat stop.toNat, x < 0x80 ∧ x ≠ Byte.PERCENT := by
+  intro n
+  induction n with
+  | zero =>
+    intro i acc hn h
+    rw [pctHighAny.eq_1] at h
+    have h1 : ¬ i < stop := by rw [USize.lt_iff_toNat_lt]; omega
+    simp only [h1, ↓reduceDIte] at h
+    refine ⟨h, ?_⟩
+    rw [lits_nil b _ _ (by omega)]; simp
+  | succ n ih =>
+    intro i acc hn h
+    have hi : i.toNat < stop.toNat := by omega
+    have h1 : i < stop := by rw [USize.lt_iff_toNat_lt]; exact hi
+    have hi1 := usize_succ_lt i stop.toNat hi stop.toNat_lt_two_pow_numBits
+    rw [pctHighAny.eq_1] at h
+    simp only [h1, ↓reduceDIte] at h
+    obtain ⟨ha, hrest⟩ := ih (i + 1) _ (by omega) h
+    simp only [UInt8.or_eq_zero_iff] at ha
+    refine ⟨ha.1, ?_⟩
+    rw [lits_cons b i.toNat stop.toNat hi hs]
+    intro x hx
+    rcases List.mem_cons.mp hx with hx | hx
+    · subst hx; exact pctHighFlag_zero _ ha.2
+    · rw [hi1] at hrest; exact hrest x hx
+
+theorem plusAt_get (b : ByteArray) (i : USize) (h : i.toNat < b.size) (k : Nat) (hk : k < b.size) :
+    (plusAt b i h)[k]'(by rw [size_plusAt]; exact hk) = if i.toNat = k then plusByte b[k] else b[k] := by
+  show (b.data.uset i (plusByte (b.uget i h)) h)[k]'(by simpa using hk) = _
+  simp only [Array.uset, Array.getElem_set]
+  split
+  · rename_i he; subst he; rfl
+  · rfl
+
+/-- What `plusTail` and `plusMap` compute: from `i` on, each byte mapped. -/
+def plusFrom (b : ByteArray) (i : Nat) (k : Nat) (hk : k < b.size) : UInt8 :=
+  if i ≤ k then plusByte b[k] else b[k]
+
+theorem plusTail_spec (stop : USize) :
+    ∀ (n : Nat) (b : ByteArray) (hs : stop.toNat = b.size) (i : USize), stop.toNat - i.toNat = n →
+      ∃ hz : (plusTail b stop hs i).size = b.size,
+        ∀ k (hk : k < b.size), (plusTail b stop hs i)[k]'(hz ▸ hk) = plusFrom b i.toNat k hk := by
+  intro n
+  induction n with
+  | zero =>
+    intro b hs i hn
+    have h1 : ¬ i < stop := by rw [USize.lt_iff_toNat_lt]; omega
+    have e : plusTail b stop hs i = b := by rw [plusTail.eq_1]; simp only [h1, ↓reduceDIte]
+    refine ⟨by rw [e], fun k hk => ?_⟩
+    have hik : ¬ i.toNat ≤ k := by omega
+    simp only [plusFrom, hik, ↓reduceIte]
+    congr 1
+  | succ n ih =>
+    intro b hs i hn
+    have hi : i.toNat < stop.toNat := by omega
+    have h1 : i < stop := by rw [USize.lt_iff_toNat_lt]; exact hi
+    have hi1 := usize_succ_lt i stop.toNat hi stop.toNat_lt_two_pow_numBits
+    have e : plusTail b stop hs i = plusTail (plusAt b i (by omega)) stop (by rw [size_plusAt]; exact hs) (i + 1) := by
+      rw [plusTail.eq_1]; simp only [h1, ↓reduceDIte]
+    obtain ⟨hz, hg⟩ := ih (plusAt b i (by omega)) (by rw [size_plusAt]; exact hs) (i + 1) (by omega)
+    refine ⟨by rw [e, hz, size_plusAt], fun k hk => ?_⟩
+    have hg' := hg k (by rw [size_plusAt]; exact hk)
+    simp only [plusFrom, hi1, plusAt_get _ _ _ k hk] at hg' ⊢
+    simp only [e]; rw [hg']
+    repeat' split
+    all_goals first | (exfalso; omega) | rfl | (subst_vars; rfl)
+
+theorem plusMap_spec (stop : USize) :
+    ∀ (n : Nat) (b : ByteArray) (hs : stop.toNat = b.size) (i : USize) (hi : i.toNat ≤ stop.toNat),
+      stop.toNat - i.toNat = n →
+      ∃ hz : (plusMap b stop hs i hi).size = b.size,
+        ∀ k (hk : k < b.size), (plusMap b stop hs i hi)[k]'(hz ▸ hk) = plusFrom b i.toNat k hk := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | _ n ih =>
+    intro b hs i hi hn
+    rw [plusMap.eq_1]
+    split
+    · rename_i h
+      have h4 : i.toNat + 4 ≤ stop.toNat := by
+        rw [USize.le_iff_toNat_le, USize.toNat_sub_of_le _ _ (USize.le_iff_toNat_le.mpr hi)] at h
+        simp at h; omega
+      have hlt := stop.toNat_lt_two_pow_numBits
+      have hU : USize.size = 2 ^ System.Platform.numBits := rfl
+      have e1 : (i + 1).toNat = i.toNat + 1 := usize_add_toNat i 1 (by omega)
+      have e2 : (i + 2).toNat = i.toNat + 2 := usize_add_toNat i 2 (by omega)
+      have e3 : (i + 3).toNat = i.toNat + 3 := usize_add_toNat i 3 (by omega)
+      have e4 : (i + 4).toNat = i.toNat + 4 := usize_add_toNat i 4 (by omega)
+      obtain ⟨hz, hg⟩ := ih (stop.toNat - (i + 4).toNat) (by omega) _ _ (i + 4) _ rfl
+      refine ⟨by rw [hz]; simp only [size_plusAt], fun k hk => ?_⟩
+      rw [hg k (by simp only [size_plusAt]; exact hk)]
+      simp only [plusFrom, e4]
+      have hk1 : k < (plusAt b i (by omega)).size := by rw [size_plusAt]; exact hk
+      have hk2 : k < (plusAt (plusAt b i (by omega)) (i + 1) (by rw [size_plusAt]; omega)).size := by
+        simp only [size_plusAt]; exact hk
+      have hk3 : k < (plusAt (plusAt (plusAt b i (by omega)) (i + 1) (by rw [size_plusAt]; omega)) (i + 2)
+          (by simp only [size_plusAt]; omega)).size := by simp only [size_plusAt]; exact hk
+      rw [plusAt_get _ _ _ k hk3, plusAt_get _ _ _ k hk2, plusAt_get _ _ _ k hk1, plusAt_get _ _ _ k hk,
+        e1, e2, e3]
+      repeat' split
+      all_goals first | (exfalso; omega) | rfl | (subst_vars; rfl)
+    · exact plusTail_spec stop _ b hs i rfl
+
+theorem plusByte_enc (c : UInt8) (h : c < 0x80) : encByte c = [plusByte c] := by
+  simp only [encByte, h, ↓reduceIte, plusByte]
+
+theorem encList_plus (l : List UInt8) (h : ∀ x ∈ l, x < 0x80) : encList l = l.map plusByte := by
+  induction l with
+  | nil => rfl
+  | cons c l ih =>
+    have := ih (fun x hx => h x (by simp [hx]))
+    simp only [encList, List.flatMap_cons, List.map_cons] at this ⊢
+    rw [plusByte_enc c (h c (by simp)), this]; rfl
+
+theorem unquotePlusLatin1_lit_all (raw : ByteArray) (h : ∀ x ∈ raw.data.toList, x ≠ Byte.PERCENT) :
+    (unquotePlusLatin1 raw).toByteArray = ⟨(encList raw.data.toList).toArray⟩ := by
+  unfold unquotePlusLatin1
+  rw [finish_toBytes, foldl_toBytes, foldl_lit _ _ rfl rfl h]
+  apply ByteArray.ext_toList
+  simp [toBytes, finish]
+
+/-- A field with no `%` and no byte `≥ 0x80` decodes to its bytes with each
+`+` mapped to a space, in place. -/
+theorem pctHighAny_plus (raw : ByteArray) (hw : raw.size < USize.size)
+    (h : pctHighAny raw raw.size.toUSize (by rw [toNat_toUSize hw]; exact Nat.le_refl _) 0 0 = 0) :
+    (unquotePlusLatin1 raw).toByteArray = plusMap raw raw.size.toUSize (toNat_toUSize hw) 0 (by simp) := by
+  have hall := (pctHighAny_zero raw raw.size.toUSize _ _ 0 0 rfl h).2
+  rw [toNat_toUSize hw] at hall
+  have hl : lits raw (0 : USize).toNat raw.size = raw.data.toList := by
+    unfold lits; rw [USize.toNat_zero, Nat.sub_zero, List.drop_zero, List.take_of_length_le (by simp)]
+  rw [hl] at hall
+  rw [unquotePlusLatin1_lit_all raw (fun x hx => (hall x hx).2), encList_plus _ (fun x hx => (hall x hx).1)]
+  obtain ⟨hz, hg⟩ := plusMap_spec _ _ raw (toNat_toUSize hw) 0 (by simp) rfl
+  apply ByteArray.ext_toList
+  apply List.ext_getElem
+  · simp [hz]
+  · intro k h1 h2
+    have hk : k < raw.size := by simpa using h1
+    have := hg k hk
+    simp only [plusFrom, USize.toNat_zero, Nat.zero_le, ↓reduceIte] at this
+    simp only [List.getElem_map, Array.getElem_toList]
+    exact this.symm
+
 end Unquote
 
 /-- `unquotePlusLatin1`, run fast: a plain field is its own bytes, any other
@@ -544,6 +700,9 @@ def unquotePlusLatin1Fast (raw : ByteArray) : String :=
   if hw : raw.size < USize.size then
     if h : Unquote.specialAny raw raw.size.toUSize (by rw [toNat_toUSize hw]; exact Nat.le_refl _) 0 0 = 0 then
       String.ofByteArray raw (by rw [← Unquote.specialAny_plain raw hw h]; exact (unquotePlusLatin1 raw).isValidUTF8)
+    else if h2 : Unquote.pctHighAny raw raw.size.toUSize (by rw [toNat_toUSize hw]; exact Nat.le_refl _) 0 0 = 0 then
+      String.ofByteArray (Unquote.plusMap raw raw.size.toUSize (toNat_toUSize hw) 0 (by simp))
+        (by rw [← Unquote.pctHighAny_plus raw hw h2]; exact (unquotePlusLatin1 raw).isValidUTF8)
     else
       String.ofByteArray (unquotePlusLatin1Bytes raw)
         (by rw [unquotePlusLatin1Bytes_eq]; exact (unquotePlusLatin1 raw).isValidUTF8)
@@ -558,7 +717,9 @@ def unquotePlusLatin1Fast (raw : ByteArray) : String :=
   split
   · split
     · rename_i hw h; exact (Unquote.specialAny_plain raw hw h)
-    · exact (unquotePlusLatin1Bytes_eq raw).symm
+    · split
+      · rename_i hw _ h2; exact (Unquote.pctHighAny_plus raw hw h2)
+      · exact (unquotePlusLatin1Bytes_eq raw).symm
   · exact (unquotePlusLatin1Bytes_eq raw).symm
 
 end LeanMultipart

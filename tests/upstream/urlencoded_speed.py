@@ -50,15 +50,17 @@ def rep(unit, n):
     return (unit * (n // len(unit) + 1))[:n]
 
 
-UNITS = {"plain": b"x", "escaped": b"%41", "mixed": b"ab+c%20", "plus": b"hello+world", "latin": "café".encode()}
+UNITS = {"plain": b"x", "escaped": b"%41", "mixed": b"ab+c%20", "plus": b"hello+world", "latin": "café".encode(),
+         "fox": b"the+quick+brown+fox+jumps+over+the+lazy+dog+", "iam": b"I+am+a+man+"}
 
 for kind, sizes in [("plain", [1, 10, 50]), ("escaped", [1, 10, 50]), ("mixed", [1, 10, 50]),
-                    ("plus", [1, 10]), ("latin", [1, 10])]:
+                    ("plus", [1, 10]), ("latin", [1, 10]), ("fox", [1, 10]), ("iam", [1, 10])]:
     for mib in sizes:
         ms, out = best(parse, b"a=" + rep(UNITS[kind], mib * MIB))
         print(f"qs-{kind}-{mib} ms={ms:.2f} out={len(out[0][1])}")
 
 for row, unit, sizes in [("name", b"x", [1, 2, 4]), ("name-pw", b"hello+world", [1, 2]),
+                         ("name-fox", UNITS["fox"], [1, 2]), ("name-a", b"a+", [1, 2]),
                          ("name-plus", "hello+café".encode(), [1, 10])]:
     for mib in sizes:
         ms, out = best(parse, rep(unit, mib * MIB) + b"=1")
