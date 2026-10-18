@@ -37,6 +37,13 @@ roots = ["examples.support.Hashlib", "examples.support.Wsgiref"]
 name = "docs-index"
 root = "examples.docs.Index"
 
+# The verification gate, compiled: `lake exe axioms LeanMultipart`. A
+# byte-for-byte copy of stack-tools/Axioms.lean, pinned by scripts/Axioms.sha256.
+[[lean_exe]]
+name = "axioms"
+root = "scripts.Axioms"
+supportInterpreter = true
+
 # Native time and memory checks: `scripts/bench.sh`.
 [[lean_exe]]
 name = "bench"

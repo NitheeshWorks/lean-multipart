@@ -14,7 +14,7 @@ lake build                              # library + proofs + test executables
 lake exe props [seed]                   # property tests, < 1 s
 lake exe conformance                    # upstream-mirroring cases
 lake exe docs-index                     # the ported docs examples
-lake env lean --run scripts/Axioms.lean LeanMultipart   # axiom hygiene
+lake exe axioms LeanMultipart           # the verification gate (pinned copy of stack-tools/Axioms.lean)
 scripts/check.sh [--quick|--pbt]        # the whole gate
 lake env lean LeanMultipart/Proofs/Foo.lean     # check one file (never bare `lean`)
 ```
