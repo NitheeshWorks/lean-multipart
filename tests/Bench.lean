@@ -183,6 +183,15 @@ def bounds : String → Nat × Nat
   | "percent50" => (10000000, 8)
   | _ => (0, 0)
 
+/-- Absolute time caps in µs on the rows whose `bounds` are relative to this
+port's own time (raw bytes `≥ 0x80`, a documented gap against Python):
+1 MiB within 10 ms, 10 MiB within 100 ms, so a regression is caught however
+the relative bound was set. -/
+def absCap : String → Option Nat
+  | "qs-latin-1" | "name-plus-1" => some 10000
+  | "qs-latin-10" | "name-plus-10" => some 100000
+  | _ => none
+
 def main (args : List String) : IO UInt32 := do
   let some c := args.head? | IO.println "usage: bench <case>"; return 2
   let b := body c
@@ -198,5 +207,7 @@ def main (args : List String) : IO UInt32 := do
   let maxKB := b.size * factor / 1024 + 65536
   let mut ok := true
   if us > maxUs then IO.println s!"  FAIL time {us} µs > {maxUs} µs"; ok := false
+  if let some cap := absCap c then
+    if us > cap then IO.println s!"  FAIL time {us} µs > absolute cap {cap} µs"; ok := false
   if peak > maxKB then IO.println s!"  FAIL memory {peak} KB > {maxKB} KB"; ok := false
   return if ok then 0 else 1

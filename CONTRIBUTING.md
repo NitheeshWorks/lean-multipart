@@ -88,7 +88,11 @@ place, and from the first byte `≥ 0x80` on, `countHigh` sizes the output
 exactly and `fillB` writes each byte's UTF-8 at its place. Their writes carry
 their bounds as proofs (`uset`, `set`), so none is checked at run time, and
 `fillA_spec`, `fillB_spec` and `litBulk_eq` say they write `encList` of the
-run, which `foldl_lit` says the machine does byte by byte. `Proofs/Unquote.lean`
+run, which `foldl_lit` says the machine does byte by byte. Raw bytes `≥ 0x80`
+stay a constant factor slower than Python (traceability
+`starlette.decode.nonascii-speed`): CPython's Latin-1 `str` is a copy of the
+bytes, while each such byte here becomes two UTF-8 bytes written one at a
+time, and the runtime then copies the result into a `String`. `Proofs/Unquote.lean`
 proves the fast form equal to the specification and marks it `@[csimp]`, so compiled code runs the fast form while every
 statement is about the specification. Scans use the same mechanism:
 `scanUntil` and `scanFor` count with `Nat` in the proofs and run on `USize`
