@@ -1,2 +1,2 @@
-import LeanMultipart.Proofs.Basic
-import LeanMultipart.Proofs.Verified
+import LeanMultipart.Proofs.Percent
+import LeanMultipart.Proofs.Querystring
