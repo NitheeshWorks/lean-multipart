@@ -169,8 +169,13 @@ def result (s : MState) : MultipartResult where
 /-- The whole-buffer parser, on a list. -/
 def parseL (cx : Ctx) (l : Bytes) : MultipartResult := result (feedT cx {} l)
 
-/-- The whole-buffer parser. -/
-def parse (cx : Ctx) (body : ByteArray) : MultipartResult := parseL cx body.data.toList
+/-- Feed a byte array, truncated at `maxSize`, as an array fold (no
+intermediate list). Equal to `feedT` on the list (`Mp.feedA_eq`). -/
+def feedA (cx : Ctx) (s : MState) (b : ByteArray) : MState :=
+  (b.data.extract 0 (room cx s b.size)).foldl (step cx) s
+
+/-- The whole-buffer parser. Equal to `parseL` on the bytes (`Mp.parse_eq`). -/
+def parse (cx : Ctx) (body : ByteArray) : MultipartResult := result (feedA cx {} body)
 
 /-! ## Printing -/
 

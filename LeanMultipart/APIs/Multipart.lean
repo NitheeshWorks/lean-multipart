@@ -52,13 +52,13 @@ offset lies in the processed bytes. -/
 def parseMultipart (b : Boundary) (cfg : MultipartConfig) (body : ByteArray) :
     {r : MultipartResult // Spec.MpParseSpec ⟨b, cfg⟩ body r} :=
   ⟨Mp.parse ⟨b, cfg⟩ body, by
+    rw [Mp.parse_eq]
     refine ⟨fun cs hcs => ?_, ?_, fun e he => (Mp.parse_total ⟨b, cfg⟩ body.data.toList).2 e he⟩
-    · rw [Mp.parse_chunks, hcs]; rfl
+    · rw [Mp.parse_chunks, hcs]
     · have h1 := (Mp.parse_total ⟨b, cfg⟩ body.data.toList).1
       have hr : Mp.room ⟨b, cfg⟩ {} body.data.toList.length ≤ body.data.toList.length := by
         unfold Mp.room; split <;> omega
       have hs : body.size = body.data.toList.length := (Array.length_toList).symm
-      simp only [Mp.parse] at h1 ⊢
       rw [hs]; omega⟩
 
 end API
@@ -99,7 +99,7 @@ def printMultipart (cx : Mp.Ctx) (ps : List RawPart) (hw : ∀ p ∈ ps, Mp.WFPa
     have := Mp.multipart_parse_print_ext cx ps epi.data.toList hw hf
     have e : (Mp.print cx.boundary ps ++ epi).data.toList = Mp.printL cx.boundary ps ++ epi.data.toList := by
       simp [Mp.print, ByteArray.data_append]
-    simp only [Mp.parse, e]
+    simp only [Mp.parse_eq, e]
     exact this⟩
 
 /-- Why `printMultipart?` refused. -/

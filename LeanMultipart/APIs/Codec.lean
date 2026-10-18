@@ -50,8 +50,9 @@ def parseQuerystring (cfg : QsConfig) (body : ByteArray) :
     {r : Except QsError (List QsField) // Spec.QsParseSpec cfg body r} :=
   ⟨Qs.parse cfg body, by
     refine ⟨fun cs hcs => ?_, fun e he => ?_⟩
-    · rw [Qs.parse_chunks, hcs]; rfl
-    · have ⟨h1, h2⟩ := Qs.parse_total cfg body.data.toList
+    · rw [Qs.parse_chunks, hcs, Qs.parse_eq]
+    · rw [Qs.parse_eq] at he
+      have ⟨h1, h2⟩ := Qs.parse_total cfg body.data.toList
       have := h2 e he
       have hr : Qs.room cfg {} body.data.toList.length ≤ body.data.toList.length := by
         unfold Qs.room; split <;> omega

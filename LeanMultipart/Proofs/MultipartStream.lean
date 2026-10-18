@@ -56,6 +56,15 @@ theorem feedChunks_eq (cx : Ctx) (s : MState) (cs : List Bytes) :
   | nil => simp only [feedChunks, feedT, room]; split <;> simp [feed]
   | cons c cs ih => simp only [feedChunks, ih, feedT_append, List.flatten_cons]
 
+theorem feedA_eq (cx : Ctx) (s : MState) (b : ByteArray) : feedA cx s b = feedT cx s b.data.toList := by
+  have hsz : b.size = b.data.toList.length := (Array.length_toList).symm
+  unfold feedA feedT feed
+  rw [← Array.foldl_toList, Array.toList_extract, hsz]
+  simp only [List.extract, Nat.sub_zero, List.drop_zero]
+
+theorem parse_eq (cx : Ctx) (b : ByteArray) : parse cx b = parseL cx b.data.toList := by
+  simp [parse, parseL, feedA_eq]
+
 /-- Streaming equals whole-buffer: any chunking of the input gives the same
 result. -/
 theorem parse_chunks (cx : Ctx) (cs : List Bytes) :

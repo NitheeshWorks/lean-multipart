@@ -30,7 +30,7 @@ structure VerifiedPercent where
   decodeTR : ∀ b : ByteArray, (percentDecode b).data.toList = percentDecodeL b.data.toList
   bytesRoundTrip : ∀ b : ByteArray, percentDecode (percentEncode b) = b
 
-def theVerifiedPercent : VerifiedPercent where
+theorem theVerifiedPercent : VerifiedPercent where
   percentRoundTrip := percentDecode_percentEncode_ext
   quotePlusRoundTrip := unquotePlus_quotePlus_ext
   encodeTR := percentEncode_toList
@@ -48,7 +48,7 @@ structure VerifiedUrlencoded where
   total : ∀ cfg, Spec.QsTotal cfg
   callbackParser : ∀ cfg cs, Qs.forget (QsParser.writeAllSt cfg {} cs) = Qs.forget (Qs.feedT cfg {} cs.flatten)
 
-def theVerifiedUrlencoded : VerifiedUrlencoded where
+theorem theVerifiedUrlencoded : VerifiedUrlencoded where
   roundTrip := Qs.urldecode_urlencode
   roundTripExt := Qs.urlencode_urldecode_ext
   bytesRoundTrip := urldecodeB_urlencodeB
@@ -66,7 +66,7 @@ structure VerifiedMultipart where
   callbackParser : ∀ cx cs, Mp.forget (MultipartParser.writeAllSt cx {} cs) = Mp.forget (Mp.feedT cx {} cs.flatten)
   boundaryValid : ∀ ct b, API.parseBoundary ct = .ok b → ValidBoundary b.1
 
-def theVerifiedMultipart : VerifiedMultipart where
+theorem theVerifiedMultipart : VerifiedMultipart where
   roundTrip := fun cx ps epi hw hf => Mp.multipart_parse_print_ext cx ps epi hw hf
   streaming := Mp.parse_chunks
   total := Mp.parse_total
@@ -82,7 +82,7 @@ structure VerifiedForm where
   multipartLimits : ∀ lim ct body ps, Starlette.parseMultipartRaw lim ct body = .ok ps →
     Spec.MultipartWithinLimits lim ps
 
-def theVerifiedForm : VerifiedForm where
+theorem theVerifiedForm : VerifiedForm where
   streaming := FormParser.write_chunks
   urlencodedLimits := Starlette.parseUrlencodedRaw_ok
   multipartLimits := Starlette.parseMultipartRaw_ok

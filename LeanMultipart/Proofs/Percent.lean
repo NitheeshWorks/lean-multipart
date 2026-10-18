@@ -143,29 +143,97 @@ theorem quotePlusL_no_sep (l : Bytes) : ∀ c ∈ quotePlusL l, c ≠ Byte.AMP �
           · rw [e2]; exact hd ⟨_, Nat.mod_lt _ (by decide)⟩
     · exact ih x hx
 
-/-! ## The tail-recursive forms equal the list forms -/
+/-! ## The array folds equal the list forms -/
 
-theorem percentEncodeTR_eq (l : Bytes) (acc : Array UInt8) :
-    (percentEncodeTR l acc).toList = acc.toList ++ percentEncodeL l := by
+theorem foldl_encStep (l : Bytes) (acc : Array UInt8) :
+    (l.foldl encStep acc).toList = acc.toList ++ percentEncodeL l := by
   induction l generalizing acc with
-  | nil => simp [percentEncodeTR, percentEncodeL]
+  | nil => simp [percentEncodeL]
   | cons c cs ih =>
-    simp only [percentEncodeTR, percentEncodeL, ih]
+    simp only [List.foldl_cons, ih, percentEncodeL, encStep]
     split <;> simp
 
-theorem quotePlusTR_eq (l : Bytes) (acc : Array UInt8) :
-    (quotePlusTR l acc).toList = acc.toList ++ quotePlusL l := by
+theorem foldl_encPlusStep (l : Bytes) (acc : Array UInt8) :
+    (l.foldl encPlusStep acc).toList = acc.toList ++ quotePlusL l := by
   induction l generalizing acc with
-  | nil => simp [quotePlusTR, quotePlusL]
+  | nil => simp [quotePlusL]
   | cons c cs ih =>
-    simp only [quotePlusTR, quotePlusL, ih]
+    simp only [List.foldl_cons, ih, quotePlusL, encPlusStep]
     split
     · simp_all
     · split <;> simp_all
 
-theorem percentDecodeTR_eq (l : Bytes) (acc : Array UInt8) :
-    (percentDecodeTR l acc).toList = acc.toList ++ percentDecodeL l := by
-  induction l using percentDecodeL.induct generalizing acc <;>
-    simp_all [percentDecodeTR, percentDecodeL]
+/-- The bytes a pending state stands for. -/
+def pendingBytes : DecPending → Bytes
+  | .none => []
+  | .pct => [Byte.PERCENT]
+  | .pctHex a _ => [Byte.PERCENT, a]
+
+/-- A pending `%XX` prefix is consistent: its digit's value is recorded. -/
+def PendingOK : DecPending → Prop
+  | .pctHex a x => hexVal? a = some x
+  | _ => True
+
+theorem hex_ne_percent {a : UInt8} {x : Nat} (h : hexVal? a = some x) : a ≠ Byte.PERCENT := by
+  rintro rfl; simp [hexVal?, Byte.PERCENT, Byte.isDigit] at h
+
+theorem percentDecodeL_pct_nonhex (c : UInt8) (l : Bytes) (hc : hexVal? c = none) :
+    percentDecodeL (Byte.PERCENT :: c :: l) = Byte.PERCENT :: percentDecodeL (c :: l) := by
+  cases l with
+  | nil => simp [percentDecodeL]
+  | cons b r => simp [percentDecodeL, hc]
+
+theorem percentDecodeL_pct_hex_nonhex (a c : UInt8) (x : Nat) (l : Bytes) (ha : hexVal? a = some x)
+    (hc : hexVal? c = none) :
+    percentDecodeL (Byte.PERCENT :: a :: c :: l) = Byte.PERCENT :: a :: percentDecodeL (c :: l) := by
+  simp [percentDecodeL, hc, ha]
+  exact percentDecodeL_cons_of_ne (hex_ne_percent ha) _
+
+theorem foldl_decStep (l : Bytes) : ∀ (acc : Array UInt8) (p : DecPending), PendingOK p →
+    (decFinish (l.foldl decStep (acc, p))).toList = acc.toList ++ percentDecodeL (pendingBytes p ++ l) := by
+  induction l with
+  | nil =>
+    intro acc p hp
+    cases p with
+    | none => simp [decFinish, pendingBytes]
+    | pct => simp [decFinish, pendingBytes, percentDecodeL]
+    | pctHex a x => simp [decFinish, pendingBytes, percentDecodeL]
+  | cons c cs ih =>
+    intro acc p hp
+    cases p with
+    | none =>
+      simp only [List.foldl_cons, decStep, pendingBytes, List.nil_append]
+      by_cases hc : c = Byte.PERCENT
+      · subst hc; simp only [beq_self_eq_true, ite_true]; rw [ih _ .pct trivial]; rfl
+      · simp only [show (c == Byte.PERCENT) = false by simpa using hc, Bool.false_eq_true, ite_false]
+        rw [ih _ .none trivial, percentDecodeL_cons_of_ne hc]; simp [pendingBytes]
+    | pct =>
+      simp only [List.foldl_cons, decStep, pendingBytes]
+      cases hx : hexVal? c with
+      | some x => simp only; rw [ih _ (.pctHex c x) hx]; rfl
+      | none =>
+        simp only
+        by_cases hc : c = Byte.PERCENT
+        · subst hc; simp only [beq_self_eq_true, ite_true]; rw [ih _ .pct trivial]
+          simp [pendingBytes, percentDecodeL_pct_nonhex _ _ hx]
+        · simp only [show (c == Byte.PERCENT) = false by simpa using hc, Bool.false_eq_true, ite_false]
+          rw [ih _ .none trivial]
+          simp [pendingBytes, percentDecodeL_pct_nonhex _ _ hx, percentDecodeL_cons_of_ne hc]
+    | pctHex a x =>
+      simp only [List.foldl_cons, decStep, pendingBytes]
+      cases hy : hexVal? c with
+      | some y =>
+        simp only; rw [ih _ .none trivial]
+        have hp' : hexVal? a = some x := hp
+        simp [pendingBytes, percentDecodeL, hp', hy]
+      | none =>
+        have hp' : hexVal? a = some x := hp
+        simp only
+        by_cases hc : c = Byte.PERCENT
+        · subst hc; simp only [beq_self_eq_true, ite_true]; rw [ih _ .pct trivial]
+          simp [pendingBytes, percentDecodeL_pct_hex_nonhex _ _ _ _ hp' hy]
+        · simp only [show (c == Byte.PERCENT) = false by simpa using hc, Bool.false_eq_true, ite_false]
+          rw [ih _ .none trivial]
+          simp [pendingBytes, percentDecodeL_pct_hex_nonhex _ _ _ _ hp' hy, percentDecodeL_cons_of_ne hc]
 
 end LeanMultipart

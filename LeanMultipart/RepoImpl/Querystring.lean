@@ -90,9 +90,14 @@ def result (s : QsState) : Except QsError (List QsField) :=
 def parseL (cfg : QsConfig) (l : Bytes) : Except QsError (List QsField) :=
   result (feedT cfg {} l)
 
-/-- The whole-buffer parser. -/
+/-- Feed a byte array, truncated at `maxSize`, as an array fold (no
+intermediate list). Equal to `feedT` on the list (`Qs.feedA_eq`). -/
+def feedA (cfg : QsConfig) (s : QsState) (b : ByteArray) : QsState :=
+  (b.data.extract 0 (room cfg s b.size)).foldl (step cfg) s
+
+/-- The whole-buffer parser. Equal to `parseL` on the bytes (`Qs.parse_eq`). -/
 def parse (cfg : QsConfig) (b : ByteArray) : Except QsError (List QsField) :=
-  parseL cfg b.data.toList
+  result (feedA cfg {} b)
 
 end Qs
 

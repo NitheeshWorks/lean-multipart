@@ -16,16 +16,24 @@ namespace LeanMultipart
   cases b; simp
 
 theorem percentEncode_toList (b : ByteArray) : (percentEncode b).data.toList = percentEncodeL b.data.toList := by
-  simp [percentEncode, percentEncodeTR_eq]
+  simp only [percentEncode, ← Array.foldl_toList, foldl_encStep]; rfl
 
 theorem percentDecode_toList (b : ByteArray) : (percentDecode b).data.toList = percentDecodeL b.data.toList := by
-  simp [percentDecode, percentDecodeTR_eq]
+  simp only [percentDecode, ← Array.foldl_toList]
+  rw [foldl_decStep _ _ .none trivial]; rfl
 
 theorem quotePlus_toList (b : ByteArray) : (quotePlus b).data.toList = quotePlusL b.data.toList := by
-  simp [quotePlus, quotePlusTR_eq]
+  simp only [quotePlus, ← Array.foldl_toList, foldl_encPlusStep]; rfl
+
+theorem foldl_map_eq {α β γ : Type} (f : γ → β → γ) (g : α → β) (l : List α) (init : γ) :
+    l.foldl (fun acc c => f acc (g c)) init = (l.map g).foldl f init := by
+  induction l generalizing init with
+  | nil => rfl
+  | cons c cs ih => simp [ih]
 
 theorem unquotePlus_toList (b : ByteArray) : (unquotePlus b).data.toList = unquotePlusL b.data.toList := by
-  simp [unquotePlus, unquotePlusL, percentDecodeTR_eq]
+  simp only [unquotePlus, ← Array.foldl_toList, unquotePlusL]
+  rw [foldl_map_eq decStep plusToSpace, foldl_decStep _ _ .none trivial]; rfl
 
 theorem byteArray_ext_toList {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b :=
   ByteArray.ext (Array.ext' h)

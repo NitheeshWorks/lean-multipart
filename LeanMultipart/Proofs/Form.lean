@@ -186,15 +186,15 @@ theorem write_append (p : FormParser) (a b : ByteArray) : (p.write a).write b = 
       have := take_append_room data.toList a.data.toList b.data.toList m
       simp only [List.length_append, Array.length_toList, List.length_take] at this ⊢
       rw [← this, Array.size_extract, Nat.sub_zero]
-  | qs cfg st => simp [write, bytes_append_toList, Qs.feedT_append]
-  | mp cfg cx st => simp [write, bytes_append_toList, Mp.feedT_append]
+  | qs cfg st => simp [write, Qs.feedA_eq, bytes_append_toList, Qs.feedT_append]
+  | mp cfg cx st => simp [write, Mp.feedA_eq, bytes_append_toList, Mp.feedT_append]
 
 theorem write_empty (p : FormParser) : p.write ByteArray.empty = p := by
   cases p with
   | octet cfg fn data =>
     simp only [write]; congr 1; apply Array.ext'; cases cfg.maxBodySize <;> simp [Array.toList_extract]
-  | qs cfg st => simp [write, Qs.feedT, Qs.feed]
-  | mp cfg cx st => simp [write, Mp.feedT, Mp.feed]
+  | qs cfg st => simp [write, Qs.feedA_eq, Qs.feedT, Qs.feed]
+  | mp cfg cx st => simp [write, Mp.feedA_eq, Mp.feedT, Mp.feed]
 
 /-- Streaming equals whole-buffer for the form parser: any chunking of the
 body gives the same fields and files. -/

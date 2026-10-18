@@ -59,40 +59,55 @@ def plusToSpace (c : UInt8) : UInt8 := if c == Byte.PLUS then Byte.SPACE else c
 /-- `unquote_plus` on bytes. -/
 def unquotePlusL (l : Bytes) : Bytes := percentDecodeL (l.map plusToSpace)
 
-/-! ## Tail-recursive forms
+/-! ## Array folds
 
-The list definitions above are the specification; these accumulate into an
-array so that large inputs do not exhaust the stack. `Proofs/Percent.lean`
-proves each equal to its list form.
+The list definitions above are the specification. The byte-array wrappers
+below run as `Array.foldl` over the input, with no recursion on the input
+and no intermediate list; `Proofs/Percent.lean` proves each equal to its
+list form.
 -/
 
-def percentEncodeTR : Bytes → Array UInt8 → Array UInt8
-  | [], acc => acc
-  | c :: cs, acc =>
-    percentEncodeTR cs (if Byte.isUnreserved c then acc.push c else acc ++ (pctTriple c).toArray)
+/-- One byte of `quote`. -/
+def encStep (acc : Array UInt8) (c : UInt8) : Array UInt8 :=
+  if Byte.isUnreserved c then acc.push c else acc ++ (pctTriple c).toArray
 
-def quotePlusTR : Bytes → Array UInt8 → Array UInt8
-  | [], acc => acc
-  | c :: cs, acc =>
-    quotePlusTR cs
-      (if Byte.isUnreserved c then acc.push c else if c == Byte.SPACE then acc.push Byte.PLUS
-       else acc ++ (pctTriple c).toArray)
+/-- One byte of `quote_plus`. -/
+def encPlusStep (acc : Array UInt8) (c : UInt8) : Array UInt8 :=
+  if Byte.isUnreserved c then acc.push c else if c == Byte.SPACE then acc.push Byte.PLUS
+  else acc ++ (pctTriple c).toArray
 
-def percentDecodeTR : Bytes → Array UInt8 → Array UInt8
-  | [], acc => acc
-  | c :: a :: b :: rest, acc =>
-    if c == Byte.PERCENT then
-      match hexVal? a, hexVal? b with
-      | some x, some y => percentDecodeTR rest (acc.push (x * 16 + y).toUInt8)
-      | _, _ => percentDecodeTR (a :: b :: rest) (acc.push c)
-    else percentDecodeTR (a :: b :: rest) (acc.push c)
-  | c :: rest, acc => percentDecodeTR rest (acc.push c)
+/-- What the decoder holds back: nothing, a `%`, or `%` and one hex digit. -/
+inductive DecPending where
+  | none
+  | pct
+  | pctHex (a : UInt8) (x : Nat)
+
+/-- One byte of `unquote_to_bytes`. -/
+def decStep : Array UInt8 × DecPending → UInt8 → Array UInt8 × DecPending
+  | (acc, .none), c => if c == Byte.PERCENT then (acc, .pct) else (acc.push c, .none)
+  | (acc, .pct), c =>
+    match hexVal? c with
+    | some x => (acc, .pctHex c x)
+    | none => if c == Byte.PERCENT then (acc.push Byte.PERCENT, .pct) else ((acc.push Byte.PERCENT).push c, .none)
+  | (acc, .pctHex a x), c =>
+    match hexVal? c with
+    | some y => (acc.push (x * 16 + y).toUInt8, .none)
+    | none =>
+      if c == Byte.PERCENT then ((acc.push Byte.PERCENT).push a, .pct)
+      else (((acc.push Byte.PERCENT).push a).push c, .none)
+
+/-- Flush what the decoder holds back. -/
+def decFinish : Array UInt8 × DecPending → Array UInt8
+  | (acc, .none) => acc
+  | (acc, .pct) => acc.push Byte.PERCENT
+  | (acc, .pctHex a _) => (acc.push Byte.PERCENT).push a
 
 /-! ## ByteArray wrappers -/
 
-def percentEncode (b : ByteArray) : ByteArray := ⟨percentEncodeTR b.data.toList #[]⟩
-def percentDecode (b : ByteArray) : ByteArray := ⟨percentDecodeTR b.data.toList #[]⟩
-def quotePlus (b : ByteArray) : ByteArray := ⟨quotePlusTR b.data.toList #[]⟩
-def unquotePlus (b : ByteArray) : ByteArray := ⟨percentDecodeTR (b.data.toList.map plusToSpace) #[]⟩
+def percentEncode (b : ByteArray) : ByteArray := ⟨b.data.foldl encStep #[]⟩
+def quotePlus (b : ByteArray) : ByteArray := ⟨b.data.foldl encPlusStep #[]⟩
+def percentDecode (b : ByteArray) : ByteArray := ⟨decFinish (b.data.foldl decStep (#[], .none))⟩
+def unquotePlus (b : ByteArray) : ByteArray :=
+  ⟨decFinish (b.data.foldl (fun acc c => decStep acc (plusToSpace c)) (#[], .none))⟩
 
 end LeanMultipart

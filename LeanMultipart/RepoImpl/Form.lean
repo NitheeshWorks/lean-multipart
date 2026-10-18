@@ -156,8 +156,8 @@ def write (p : FormParser) (chunk : ByteArray) : FormParser :=
       | none => chunk.size
       | some m => min chunk.size (m - data.size)
     .octet cfg fn (data ++ chunk.data.extract 0 room)
-  | .qs cfg st => .qs cfg (Qs.feedT { maxSize := cfg.maxBodySize, h_maxSize := cfg.h_maxBodySize } st chunk.data.toList)
-  | .mp cfg cx st => .mp cfg cx (Mp.feedT cx st chunk.data.toList)
+  | .qs cfg st => .qs cfg (Qs.feedA { maxSize := cfg.maxBodySize, h_maxSize := cfg.h_maxBodySize } st chunk)
+  | .mp cfg cx st => .mp cfg cx (Mp.feedA cx st chunk)
 
 /-- Finish: every field and file, in order, or the first error. -/
 def finalize (p : FormParser) : Except FormError (List FormItem) :=
