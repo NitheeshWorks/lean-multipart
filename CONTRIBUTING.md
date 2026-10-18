@@ -82,7 +82,9 @@ characters onto a `String`: `+` is a space, each run of `%XY` bytes is UTF-8
 with CPython's replacement rules, any other byte is its Latin-1 character.
 The machine is generic in its output (`Sink`); run into a `ByteArray` of
 UTF-8 with each run without `%` taken at once (`litSpan`, `litBulk`), it is
-`unquotePlusLatin1Fast`. A run is copied to the output, which is right until
+`unquotePlusLatin1Fast`. A field with no `%`, `+` or byte `≥ 0x80` is its own UTF-8; that is found by
+or-ing a branch-free flag over every byte (`specialAny`, which the C compiler
+vectorises; `specialAny_plain`). Otherwise a run is copied to the output, which is right until
 its first `+` or byte `≥ 0x80`; `fillA` overwrites each `+` with a space in
 place, and from the first byte `≥ 0x80` on, `countHigh` sizes the output
 exactly and `fillB` writes each byte's UTF-8 at its place. Their writes carry
@@ -96,8 +98,9 @@ time, and the runtime then copies the result into a `String`. `Proofs/Unquote.le
 proves the fast form equal to the specification and marks it `@[csimp]`, so compiled code runs the fast form while every
 statement is about the specification. Scans use the same mechanism:
 `scanUntil` and `scanFor` count with `Nat` in the proofs and run on `USize`
-indices, eight bytes per step with the flags or-ed together while none
-matches (`scanUntilU8`, `scanUntil_eq_fast`, `scanFor_eq_fast`). The
+indices, 32 bytes per step with the flags or-ed together while none
+matches (`scanUntilU32`; `fillA`, whose matches are a few bytes apart, uses
+the eight-byte `scanUntilU8`; `scanUntil_eq_fast`, `scanFor_eq_fast`). The
 querystring machines take a name's run (to `=` or `&`) and a value's run (to
 `&`) at once (`Qs.fieldSpan`, `Qs.fieldBulk_le`), and Starlette's cuts the
 run before the byte that crosses `max_part_size`, so an over-long name or

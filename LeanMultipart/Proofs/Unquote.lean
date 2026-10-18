@@ -478,12 +478,75 @@ theorem unquotePlusLatin1_plain (raw : ByteArray) (h : scanUntil raw special raw
   apply ByteArray.ext_toList
   simp [toBytes, finish]
 
+namespace Unquote
+
+theorem specialFlag_zero (c : UInt8) (h : specialFlag c = 0) : special c = false := by
+  have tb : ∀ x : Bool, x.toUInt8 = 0 → x = false := by decide
+  simp only [specialFlag, UInt8.or_eq_zero_iff] at h
+  obtain ⟨⟨h1, h2⟩, h3⟩ := h
+  have hc : c.toNat < 128 := by
+    have := congrArg UInt8.toNat h1
+    rw [UInt8.toNat_shiftRight, Nat.shiftRight_eq_div_pow] at this
+    simp at this; omega
+  have hlt : ¬ 0x80 ≤ c := by simp [UInt8.le_iff_toNat_le]; omega
+  simp [special, hlt, tb _ h2, tb _ h3]
+
+theorem specialAny_zero (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) :
+    ∀ (n : Nat) (i : USize) (acc : UInt8), stop.toNat - i.toNat = n → specialAny b stop hs i acc = 0 →
+      acc = 0 ∧ ∀ x ∈ lits b i.toNat stop.toNat, special x = false := by
+  intro n
+  induction n with
+  | zero =>
+    intro i acc hn h
+    rw [specialAny.eq_1] at h
+    have h1 : ¬ i < stop := by rw [USize.lt_iff_toNat_lt]; omega
+    simp only [h1, ↓reduceDIte] at h
+    refine ⟨h, ?_⟩
+    rw [lits_nil b _ _ (by omega)]; simp
+  | succ n ih =>
+    intro i acc hn h
+    have hi : i.toNat < stop.toNat := by omega
+    have h1 : i < stop := by rw [USize.lt_iff_toNat_lt]; exact hi
+    have hi1 := usize_succ_lt i stop.toNat hi stop.toNat_lt_two_pow_numBits
+    rw [specialAny.eq_1] at h
+    simp only [h1, ↓reduceDIte] at h
+    obtain ⟨ha, hrest⟩ := ih (i + 1) _ (by omega) h
+    simp only [UInt8.or_eq_zero_iff] at ha
+    refine ⟨ha.1, ?_⟩
+    rw [lits_cons b i.toNat stop.toNat hi hs]
+    intro x hx
+    rcases List.mem_cons.mp hx with hx | hx
+    · subst hx; exact specialFlag_zero _ ha.2
+    · rw [hi1] at hrest; exact hrest x hx
+
+theorem unquotePlusLatin1_plain_all (raw : ByteArray) (h : ∀ x ∈ raw.data.toList, special x = false) :
+    (unquotePlusLatin1 raw).toByteArray = raw := by
+  unfold unquotePlusLatin1
+  rw [finish_toBytes, foldl_toBytes, foldl_plain _ _ rfl rfl h]
+  apply ByteArray.ext_toList
+  simp [toBytes, finish]
+
+theorem specialAny_plain (raw : ByteArray) (hw : raw.size < USize.size)
+    (h : specialAny raw raw.size.toUSize (by rw [toNat_toUSize hw]; exact Nat.le_refl _) 0 0 = 0) :
+    (unquotePlusLatin1 raw).toByteArray = raw := by
+  apply unquotePlusLatin1_plain_all
+  have := (specialAny_zero raw raw.size.toUSize _ _ 0 0 rfl h).2
+  rw [toNat_toUSize hw] at this
+  intro x hx; apply this x
+  unfold lits; rw [USize.toNat_zero, Nat.sub_zero, List.drop_zero, List.take_of_length_le (by simp)]; exact hx
+
+end Unquote
+
 /-- `unquotePlusLatin1`, run fast: a plain field is its own bytes, any other
 is decoded with runs copied at once; either way the bytes are valid UTF-8
 because they are the specification's string's bytes. -/
 def unquotePlusLatin1Fast (raw : ByteArray) : String :=
-  if h : scanUntil raw Unquote.special raw.size 0 = raw.size then
-    String.ofByteArray raw (by rw [← unquotePlusLatin1_plain raw h]; exact (unquotePlusLatin1 raw).isValidUTF8)
+  if hw : raw.size < USize.size then
+    if h : Unquote.specialAny raw raw.size.toUSize (by rw [toNat_toUSize hw]; exact Nat.le_refl _) 0 0 = 0 then
+      String.ofByteArray raw (by rw [← Unquote.specialAny_plain raw hw h]; exact (unquotePlusLatin1 raw).isValidUTF8)
+    else
+      String.ofByteArray (unquotePlusLatin1Bytes raw)
+        (by rw [unquotePlusLatin1Bytes_eq]; exact (unquotePlusLatin1 raw).isValidUTF8)
   else
     String.ofByteArray (unquotePlusLatin1Bytes raw)
       (by rw [unquotePlusLatin1Bytes_eq]; exact (unquotePlusLatin1 raw).isValidUTF8)
@@ -493,7 +556,9 @@ def unquotePlusLatin1Fast (raw : ByteArray) : String :=
   apply String.toByteArray_inj.mp
   unfold unquotePlusLatin1Fast
   split
-  · rename_i h; exact (unquotePlusLatin1_plain raw h)
+  · split
+    · rename_i hw h; exact (Unquote.specialAny_plain raw hw h)
+    · exact (unquotePlusLatin1Bytes_eq raw).symm
   · exact (unquotePlusLatin1Bytes_eq raw).symm
 
 end LeanMultipart

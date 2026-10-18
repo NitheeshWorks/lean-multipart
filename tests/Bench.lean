@@ -3,7 +3,8 @@ import LeanMultipart
 /-!
 # Native time and memory checks
 
-`lake exe bench <case>` builds one input, then times the parse and reports
+`lake exe bench <case>` builds one input, then times the parse (best of up
+to 31 warm runs) and reports
 the peak resident memory (`VmHWM` from `/proc/self/status`), which includes
 the input itself. `scripts/bench.sh` runs every case in its own process and
 fails if a parse takes longer than its bound or the peak exceeds its
@@ -73,6 +74,11 @@ def qsCases : List (String × String × Nat) :=
   (["plain", "escaped", "mixed"].flatMap fun k => [1, 10, 50].map fun m => (s!"qs-{k}-{m}", k, m)) ++
   (["plus", "latin"].flatMap fun k => [1, 10].map fun m => (s!"qs-{k}-{m}", k, m))
 
+/-- A field name of `mib` MiB of `unit` repeated, then `=1`. -/
+def repName (unit : String) (mib : Nat) : ByteArray :=
+  let unit := u unit
+  (build [.rep unit (mib * mb / unit.size + 1)]).extract 0 (mib * mb) ++ u "=1"
+
 /-- A field name of `mib` MiB of `hello+café` repeated, then `=1`. -/
 def plusName (mib : Nat) : ByteArray :=
   let unit := u "hello+café"
@@ -98,6 +104,8 @@ def body : String → ByteArray
   | "name-2" => build [.fill 120 (2 * mb), .bytes (u "=1")]
   | "name-4" => build [.fill 120 (4 * mb), .bytes (u "=1")]
   | "name-over" => build [.fill 120 (mb + 1), .bytes (u "=1")]
+  | "name-pw-1" => repName "hello+world" 1
+  | "name-pw-2" => repName "hello+world" 2
   | "name-plus-1" => plusName 1
   | "name-plus-10" => plusName 10
   | c => match qsCases.find? (·.1 == c) with
@@ -131,7 +139,7 @@ def run (c : String) (b : ByteArray) : String :=
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.2.length)).foldl (· + ·) 0} chars"
-  | "name-1" | "name-2" | "name-4" | "name-plus-1" | "name-plus-10" =>
+  | "name-1" | "name-2" | "name-4" | "name-pw-1" | "name-pw-2" | "name-plus-1" | "name-plus-10" =>
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.1.length)).foldl (· + ·) 0} name chars"
@@ -156,26 +164,26 @@ def bounds : String → Nat × Nat
   | "options" => (100000, 3)
   -- a huge Content-Length is refused in linear time (Python's 4300-digit limit)
   | "cl1m" => (250000, 3)
-  -- Starlette's urlencoded parse and decode, 2× python-multipart + unquote_plus
-  -- (tests/upstream/urlencoded_speed.py: plain 1/22/106 ms, escaped 124/1130/5847,
-  -- mixed 63/575/2963 for 1/10/50 MiB); 1 MiB plain gets a 10 ms floor.
-  | "qs-plain-1" => (10000, 3) | "qs-plain-10" => (44000, 3) | "qs-plain-50" => (212000, 3)
-  | "qs-escaped-1" => (248000, 3) | "qs-escaped-10" => (2260000, 3) | "qs-escaped-50" => (11694000, 3)
-  | "qs-mixed-1" => (126000, 3) | "qs-mixed-10" => (1150000, 3) | "qs-mixed-50" => (5926000, 3)
+  -- Starlette's urlencoded parse and decode against python-multipart 0.0.32 +
+  -- unquote_plus (tests/upstream/urlencoded_speed.py), held to 2×. Each reference
+  -- is the least of three invocations' best of 5 warm runs (best of 15).
+  -- Values of 1/10/50 MiB: plain 0.43/7.66/93.0 ms, escaped 102/1068/5298,
+  -- mixed 53.4/558/3025; `hello+world` values of 1/10 MiB: 0.96/15.5.
+  | "qs-plain-1" => (860, 3) | "qs-plain-10" => (15320, 3) | "qs-plain-50" => (185900, 3)
+  | "qs-escaped-1" => (204120, 3) | "qs-escaped-10" => (2136840, 3) | "qs-escaped-50" => (10596000, 3)
+  | "qs-mixed-1" => (106800, 3) | "qs-mixed-10" => (1116520, 3) | "qs-mixed-50" => (6049280, 3)
+  | "qs-plus-1" => (1920, 3) | "qs-plus-10" => (31000, 3)
   | "cl10m" | "cl10mx" => (1000000, 3)
-  -- plain field names of 1, 2, 4 MiB, and a 1 MiB + 1 name refused at the default
-  -- limits: 2× python-multipart + unquote_plus (1.5, 2.3, 7.0 ms) and 2× Starlette
-  -- 1.8.0's refusal (1.3 ms), from tests/upstream/urlencoded_speed.py
-  | "name-1" => (3000, 3) | "name-2" => (4600, 3) | "name-4" => (14000, 3) | "name-over" => (2600, 3)
-  -- fields without `%`, as browsers send them: values of `hello+world` and raw UTF-8
-  -- `café`, names of `hello+café`, 1 and 10 MiB. python-multipart + unquote_plus:
-  -- plus 6.3 / 14.3 ms, latin 0.6 / 6.0, names 1.2 / 12.4. `+` is held to 2×.
-  -- Raw bytes ≥ 0x80 are not: Python's Latin-1 str is a copy of the bytes, while
-  -- each such byte here becomes two UTF-8 bytes, written one at a time, and the
-  -- runtime then copies and measures the result to make the `String` (about
-  -- 0.6 ns a byte), so these rows are held to 2× this port's own time
-  -- (3 / 34 ms latin, 3.2 / 34 ms names), 3-6× Python.
-  | "qs-plus-1" => (12600, 3) | "qs-plus-10" => (28600, 3)
+  -- names: plain `x` of 1/2/4 MiB 0.53/0.87/2.44 ms, `hello+world` of 1/2 MiB
+  -- 0.93/1.93; Starlette 1.8.0 refusing a 1 MiB + 1 name at its defaults 0.54
+  | "name-1" => (1060, 3) | "name-2" => (1740, 3) | "name-4" => (4880, 3)
+  | "name-pw-1" => (1860, 3) | "name-pw-2" => (3860, 3) | "name-over" => (1080, 3)
+  -- Raw bytes ≥ 0x80 without `%` (`café` values, `hello+café` names; Python
+  -- 0.37/6.52 and 0.87/13.0 ms at 1/10 MiB) are a documented gap
+  -- (traceability starlette.decode.nonascii-speed): Python's Latin-1 str is a
+  -- copy of the bytes, while each such byte here becomes two UTF-8 bytes,
+  -- written one at a time, and the runtime then copies and measures the result
+  -- to make the `String`. Held to 2× this port's own time, and to `absCap`.
   | "qs-latin-1" => (6000, 3) | "qs-latin-10" => (70000, 3)
   | "name-plus-1" => (7000, 3) | "name-plus-10" => (70000, 3)
   | "file50" | "stream50" => (910000, 3)
@@ -194,17 +202,36 @@ def absCap : String → Option Nat
 
 def main (args : List String) : IO UInt32 := do
   let some c := args.head? | IO.println "usage: bench <case>"; return 2
-  let b := body c
-  IO.println s!"{c} built {b.size} bytes"
-  let t0 ← IO.monoNanosNow
-  let outcome := run c b
+  -- Each run gets a freshly built body that it owns, as a server's parser
+  -- does; the case name is read back from a ref, so the compiler cannot hoist
+  -- the (pure) build and parse out of the loop. The peak memory is read after
+  -- the first run. The time is the best of up to 31 runs (fewer once 2 s
+  -- have been spent); the Python references are the best of 15
+  -- warm runs (three invocations of best of 5).
+  let name ← IO.mkRef c
+  let mut best := 0
+  let mut spent := 0
+  let mut outcome := ""
+  let mut peak := 0
+  let mut size := 0
+  for k in [0:31] do
+    if k > 0 && spent > 2000000000 then break
+    let input := body (← name.get)
+    if k == 0 then IO.println s!"{c} built {input.size} bytes"
+    size := input.size
+    let t0 ← IO.monoNanosNow
+    let o := run c input
+    if o.length == 0 then IO.println "empty outcome"
+    let t1 ← IO.monoNanosNow
+    if k == 0 then peak ← peakKB
+    if k == 0 || t1 - t0 < best then best := t1 - t0
+    spent := spent + (t1 - t0)
+    outcome := o
   IO.println s!"{c} outcome={outcome}"
-  let t1 ← IO.monoNanosNow
-  let peak ← peakKB
-  let us := (t1 - t0) / 1000
-  IO.println s!"RESULT {c} size={b.size} ms={us / 1000} us={us} peakKB={peak}"
+  let us := best / 1000
+  IO.println s!"RESULT {c} size={size} ms={us / 1000} us={us} peakKB={peak}"
   let (maxUs, factor) := bounds c
-  let maxKB := b.size * factor / 1024 + 65536
+  let maxKB := size * factor / 1024 + 65536
   let mut ok := true
   if us > maxUs then IO.println s!"  FAIL time {us} µs > {maxUs} µs"; ok := false
   if let some cap := absCap c then

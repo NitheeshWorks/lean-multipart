@@ -121,6 +121,24 @@ def fieldSpan (s : QsState) (b : ByteArray) (i stop : Nat) : Nat :=
   | .fieldData => scanFor b Byte.AMP stop i - i
   | _ => 0
 
+/-- `fieldSpan` as compiled: a name's run ends at the first `=` or `&`, found
+by two single-byte scans (`scanUntil_or`), which run faster than one scan
+for the pair. -/
+def fieldSpanFast (s : QsState) (b : ByteArray) (i stop : Nat) : Nat :=
+  match s.phase with
+  | .fieldName => scanFor b Byte.AMP (scanFor b Byte.EQ stop i) i - i
+  | .fieldData => scanFor b Byte.AMP stop i - i
+  | _ => 0
+
+@[csimp] theorem fieldSpan_eq_fast : @fieldSpan = @fieldSpanFast := by
+  funext s b i stop
+  unfold fieldSpan fieldSpanFast
+  split
+  · rw [scanFor_eq_scanUntil b _ (scanFor b Byte.EQ stop i) _ i rfl, scanFor_eq_scanUntil b _ stop _ i rfl]
+    exact congrArg (· - i) (scanUntil_or b (· == Byte.AMP) (· == Byte.EQ) stop _ i rfl)
+  · rfl
+  · rfl
+
 /-- Append the `n` bytes at `i` to the name or the value. -/
 def fieldBulk (s : QsState) (b : ByteArray) (i n : Nat) : QsState :=
   if n = 0 then s

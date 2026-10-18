@@ -140,6 +140,24 @@ or `+` is its own character and its own UTF-8 byte. -/
 /-- A byte that is not plain ASCII. -/
 @[inline] def special (c : UInt8) : Bool := 0x80 ≤ c || c == Byte.PERCENT || c == Byte.PLUS
 
+/-- Nonzero exactly for a byte that is not plain ASCII, without branches. -/
+@[inline] def specialFlag (c : UInt8) : UInt8 :=
+  (c >>> 7) ||| (c == Byte.PERCENT).toUInt8 ||| (c == Byte.PLUS).toUInt8
+
+/-- `acc` or-ed with `specialFlag` of every byte of `b[i, stop)`: a pass with
+no early exit, which the C compiler turns into vector code. -/
+def specialAny (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) (i : USize) (acc : UInt8) : UInt8 :=
+  if h : i < stop then
+    specialAny b stop hs (i + 1) (acc ||| specialFlag (b.uget i (by rw [USize.lt_iff_toNat_lt] at h; omega)))
+  else acc
+termination_by stop.toNat - i.toNat
+decreasing_by
+  rw [USize.lt_iff_toNat_lt] at h
+  have : (i + 1).toNat = i.toNat + 1 := by
+    rw [USize.toNat_add]; simp only [USize.toNat_one]
+    exact Nat.mod_eq_of_lt (by have := stop.toNat_lt_two_pow_numBits; omega)
+  omega
+
 /-! ## Runs without `%`
 
 Outside an escape and a UTF-8 sequence, every byte but `%` is a literal: `+`
