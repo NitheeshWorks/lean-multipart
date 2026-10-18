@@ -70,8 +70,11 @@ inductive FormError where
   | unknownContentType (ct : String)
   /-- "No Content-Type header given!" -/
   | noContentType
-  /-- `Content-Length` is not a non-negative integer. -/
-  | badContentLength
+  /-- `Content-Length` is not an integer as Python's `int()` reads one
+  ("invalid literal for int() with base 10: …"). -/
+  | badContentLength (value : ByteArray)
+  /-- "Content-Length must be non-negative" -/
+  | negativeContentLength
   /-- "Field name not found in Content-Disposition" -/
   | missingFieldName
   /-- "Unknown Content-Transfer-Encoding" (only with `errorOnBadCte`) -/

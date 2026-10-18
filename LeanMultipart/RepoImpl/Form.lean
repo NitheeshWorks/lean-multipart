@@ -211,17 +211,44 @@ def createFormParser (headers : Headers) (config : FormParserConfig := {})
   let kind ← FormKind.select (latin1Decode ⟨ctype.toArray⟩) boundary
   pure (FormParser.ofKind config kind fileName)
 
-/-- Upstream's `parse_form(headers, input_stream, on_field, on_file)`: the
-fields and files of a body, reading at most `Content-Length` bytes if the
-header is present. -/
+/-- Python's `int()` on a byte string: surrounding ASCII whitespace, an
+optional sign, then decimal digits with single underscores between them. -/
+def pyInt? (b : ByteArray) : Option Int :=
+  let isWs (c : UInt8) := c == 32 || (9 ≤ c && c ≤ 13)
+  let l := ((b.data.toList.dropWhile isWs).reverse.dropWhile isWs).reverse
+  let (neg, digits) := match l with
+    | 45 :: r => (true, r)
+    | 43 :: r => (false, r)
+    | r => (false, r)
+  let isDigit (c : UInt8) := 48 ≤ c && c ≤ 57
+  -- digits, with `_` only between two digits
+  let rec ok : List UInt8 → Bool
+    | [] => false
+    | [c] => isDigit c
+    | c :: 95 :: r => isDigit c && (match r with | d :: _ => isDigit d | [] => false) && ok r
+    | c :: r => isDigit c && ok r
+  if ok digits then
+    let n : Nat := (digits.filter isDigit).foldl (fun acc c => acc * 10 + (c - 48).toNat) 0
+    some (if neg then -(n : Int) else n)
+  else none
+
+/-- `Content-Length`, read as upstream's `parse_form` reads it. -/
+def contentLength? (headers : Headers) : Except FormError (Option Nat) :=
+  match headers.get "Content-Length" with
+  | none => .ok none
+  | some cl => match pyInt? cl with
+    | none => .error (.badContentLength cl)
+    | some n => if n < 0 then .error .negativeContentLength else .ok (some n.toNat)
+
+/-- Upstream's `parse_form(headers, input_stream, on_field, on_file)`, over
+a body in memory: the fields and files, reading at most `Content-Length`
+bytes if the header is present (see `parseFormStream` for a stream). -/
 def parseForm (headers : Headers) (body : ByteArray) (config : FormParserConfig := {}) :
     Except FormError (List FormItem) := do
   let p ← createFormParser headers config
-  let body ← match headers.get "Content-Length" with
+  let body ← match ← contentLength? headers with
     | none => pure body
-    | some cl => match (latin1Decode cl).trimAscii.toString.toNat? with
-      | some n => pure (body.extract 0 n)
-      | none => .error .badContentLength
+    | some n => pure (body.extract 0 n)
   (p.write body).finalize
 
 /-- `parse_form` with upstream's `on_field` / `on_file` callbacks. -/

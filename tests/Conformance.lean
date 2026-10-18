@@ -198,7 +198,115 @@ def exampleCases : List Case := [
       return out.exitCode == 0 && out.stdout == docsIndexExpected }
 ]
 
-def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ [
+/-! ## Error paths of the `IO` objects
+
+Each case runs `parseFormStream` or `MultipartParser.create` and `write`,
+and compares the outcome with upstream's line from
+`tests/upstream/io_errors.py` (python-multipart 0.0.32):
+`name|outcome|class|message|callbacks`. -/
+
+def splitError (msg : String) : String × String :=
+  match msg.splitOn ": " with
+  | cls :: rest => (cls, ": ".intercalate rest)
+  | [] => ("", msg)
+
+def nameOf (b : ByteArray) : String := String.fromUTF8! b
+
+/-- Our line for `parse_form(headers, BytesIO(body), …, chunk_size)`. -/
+def formLine (name : String) (headers : Headers) (body : ByteArray) (chunkSize : Nat := 1048576) : IO String := do
+  let got ← IO.mkRef (#[] : Array String)
+  let buf ← IO.mkRef ({ data := body } : IO.FS.Stream.Buffer)
+  try
+    parseFormStream headers (IO.FS.Stream.ofBuffer buf)
+      (fun f => got.modify (·.push (nameOf f.fieldName)))
+      (fun f => got.modify (·.push ((f.fieldName.map nameOf).getD "None"))) chunkSize
+    return s!"{name}|ok|||{",".intercalate (← got.get).toList}"
+  catch e =>
+    let (cls, msg) := splitError (toString e)
+    return s!"{name}|raise|{cls}|{msg}|{",".intercalate (← got.get).toList}"
+
+/-- Our line for `MultipartParser(boundary, {})` then a `write`. -/
+def createLine (name : String) (boundary : Option ByteArray) (data : ByteArray) : IO String := do
+  let p ← try MultipartParser.create boundary catch e =>
+    let (cls, msg) := splitError (toString e); return s!"{name}|raise at create|{cls}|{msg}|"
+  try
+    discard <| p.write data
+    return s!"{name}|ok|||"
+  catch e =>
+    let (cls, msg) := splitError (toString e); return s!"{name}|raise at write|{cls}|{msg}|"
+
+def fields (l : String) : List String := l.splitOn "|"
+
+/-- Same outcome, class, message and callbacks. -/
+def same (ours up : String) : Bool := ours == up
+
+/-- A multipart parse error: same outcome, class, offset (`… at N`) and
+callbacks; upstream's message also names the byte. -/
+def sameError (ours up : String) : Bool :=
+  match fields ours, fields up with
+  | [n, o, c, m, cb], [n', o', c', m', cb'] =>
+    n == n' && o == o' && c == c' && cb == cb' && (m.splitOn " at ").getLast? == (m'.splitOn " at ").getLast?
+  | _, _ => false
+
+/-- As `sameError`, but no callbacks run before the error (deviation 6:
+`parseFormStream` calls them once the body is read; upstream calls them for
+the items before the error). -/
+def sameErrorNoCallbacks (ours up : String) : Bool :=
+  match fields up with
+  | [n, o, c, m, _] => sameError ours s!"{n}|{o}|{c}|{m}|"
+  | _ => false
+
+def urlCt : Headers := [("Content-Type", bs "application/x-www-form-urlencoded")]
+def badHeaderBody : ByteArray :=
+  bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n--B\r\nBad Header: y\r\n\r\nz\r\n--B--\r\n"
+def clBody : ByteArray := bs (nTimes "a=b&c=d" 5)
+
+def ioCase (name upstream : String) (ours : IO String) (agree : String → String → Bool := same) : Case :=
+  { upstream := s!"python_multipart parse_form / MultipartParser (tests/upstream/io_errors.py: {upstream})"
+    name := s!"io: {name}",
+    run := do
+      let o ← ours
+      unless agree o upstream do IO.println s!"      ours:     {o}\n      upstream: {upstream}"
+      return agree o upstream }
+
+def ioCases : List Case :=
+  [ ioCase "bad header after a field (no callbacks before the error, deviation 6)"
+      "bad header after a field|raise|MultipartParseError|Found invalid character 32 in header at 60|a"
+      (formLine "bad header after a field" [("Content-Type", bs "multipart/form-data; boundary=B")] badHeaderBody)
+      sameErrorNoCallbacks,
+    ioCase "chunk_size 0" "chunk_size 0|raise|ValueError|chunk_size must be a positive number, not 0|"
+      (formLine "chunk_size 0" urlCt (bs "a=b") 0),
+    ioCase "no boundary" "no boundary|raise|FormParserError|No boundary given|"
+      (formLine "no boundary" [("Content-Type", bs "multipart/form-data")] .empty),
+    ioCase "no Content-Type" "no Content-Type|raise|ValueError|No Content-Type header given!|"
+      (formLine "no Content-Type" [] .empty),
+    ioCase "create b'B' then a write that raises"
+      "create b'B'|raise at write|MultipartParseError|Found invalid character 32 in header at 8|"
+      (createLine "create b'B'" (some (bs "B")) (bs "--B\r\nBad Header: y\r\n\r\nz\r\n--B--\r\n")) sameError,
+    -- upstream's constructor takes len(None): a TypeError, with Python's message
+    ioCase "create None raises a TypeError"
+      "create None|raise at create|TypeError|object of type 'NoneType' has no len()|"
+      (createLine "create None" none .empty),
+    -- deviation 4: b'' is not a Boundary, so create raises; upstream fails at the first write
+    ioCase "create b'' raises at create (deviation 4), upstream at write"
+      "create b''|raise at write|MultipartParseError|Did not find CR at end of boundary (2)|"
+      (createLine "create b''" (some .empty) (bs "--B\r\n"))
+      (fun o u => (fields o).take 3 == ["create b''", "raise at create", "ValueError"] && (fields u)[1]! == "raise at write") ] ++
+  ([("-1", "Content-Length '-1'|raise|ValueError|Content-Length must be non-negative|"),
+    ("x", "Content-Length 'x'|raise|ValueError|invalid literal for int() with base 10: b'x'|"),
+    ("+3", "Content-Length '+3'|ok|||a"),
+    (" 3 ", "Content-Length ' 3 '|ok|||a"),
+    ("3_0", "Content-Length '3_0'|ok|||a,c,c,c,c"),
+    ("1__0", "Content-Length '1__0'|raise|ValueError|invalid literal for int() with base 10: b'1__0'|"),
+    ("_3", "Content-Length '_3'|raise|ValueError|invalid literal for int() with base 10: b'_3'|"),
+    ("3_", "Content-Length '3_'|raise|ValueError|invalid literal for int() with base 10: b'3_'|"),
+    ("-0", "Content-Length '-0'|ok|||"),
+    ("", "Content-Length ''|raise|ValueError|invalid literal for int() with base 10: b''|"),
+    ("\t3\n", "Content-Length '\\t3\\n'|ok|||a")].map fun (cl, up) =>
+    ioCase s!"Content-Length {repr cl}" up
+      (formLine ((fields up).headD "") (urlCt ++ [("Content-Length", bs cl)]) clBody))
+
+def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ [
   -- Querystring parser
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_simple_querystring"
     name := "querystring simple", run := qsIs {} ["foo=bar"] [("foo", "bar")] },

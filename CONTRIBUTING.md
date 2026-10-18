@@ -145,14 +145,19 @@ Each is a `status = "deviation"` row in `docs/traceability.toml`.
 4. **Boundary.** A `Boundary` has 1 to 256 bytes (upstream's
    `MAX_BOUNDARY_LENGTH`, not RFC 2046's 70, which upstream does not enforce)
    and only RFC 2046 `bchars`, last byte not a space. Upstream accepts any
-   byte; a `CR` in a boundary would break the delimiter search.
+   byte; a `CR` in a boundary would break the delimiter search. So
+   `MultipartParser.create` raises a `ValueError` for a boundary that is not a
+   `Boundary` (`b''` included), where upstream's constructor accepts it and
+   fails at the first `write`.
 5. **Transfer-encoded parts (UP-002, UP-003).** `FormParser` decodes a
    base64 or quoted-printable part's whole body at once, upstream's
    single-write behaviour, for every chunking. The streaming
    `Base64Decoder` / `QuotedPrintableDecoder` structures reproduce upstream's
    per-write caching exactly.
 6. **`FormParser` callbacks** fire at `finalize` (`finalizeWith`), not during
-   `write`; the items and their order are upstream's.
+   `write`; the items and their order are upstream's. So with an error in
+   the body no callback runs (upstream runs those for the items before it);
+   `parseFormStream` inherits this (deviation 10).
 7. **Header events** report a header name and value whole when they end;
    upstream may split them at chunk ends. The concatenation is the same.
 8. **`max_size < 1`** cannot be configured: the bound is a structure field
@@ -160,9 +165,15 @@ Each is a `status = "deviation"` row in `docs/traceability.toml`.
 9. **Files are held in memory.** `UPLOAD_DIR`, `UPLOAD_KEEP_FILENAME`,
    `UPLOAD_KEEP_EXTENSIONS`, `UPLOAD_DELETE_TMP`, `MAX_MEMORY_FILE_SIZE` and
    the `File` file-object methods are excluded.
-10. **`parse_form`** takes the body as a byte array (honouring
-    `Content-Length`) instead of a stream and `chunk_size`; stream with
-    `FormParser.write`.
+10. **`parse_form`** is `parseFormStream headers stream onField onFile
+    chunkSize` in `IO`: it reads the stream as upstream does (chunks of
+    `chunk_size`, never past `Content-Length`, which is read as Python's
+    `int()` reads it) and raises upstream's error classes and messages
+    (checked against python-multipart 0.0.32 by the `io:` conformance cases).
+    As in deviation 6, the callbacks run once the whole body is read: when the
+    body has an error none runs, where upstream calls `on_field` / `on_file`
+    for the items before the error and then raises. `parseForm headers body`
+    is the pure form over a byte array.
 11. **Starlette names** are returned as bytes; decoding with the request
     charset is lean-starlette's job.
 12. **`parse_options_header` input is bounded** at `Options.maxLength`
