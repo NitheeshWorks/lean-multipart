@@ -12,17 +12,23 @@ $CAPPED lake build bench >/dev/null || exit 1
 # references in tests/upstream/urlencoded_speed.py are taken.
 PIN=""
 pick_core() {
-  local f n max=0 cores=() a b best="" bestidle=-1
+  local f n max=0 cores=() a b best="" bestidle=-1 idle sib sibs i0 i1
   for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do
     n=${f#/sys/devices/system/cpu/cpu}; n=${n%%/*}
     if (( $(cat "$f") > max )); then max=$(cat "$f"); cores=("$n")
     elif (( $(cat "$f") == max )); then cores+=("$n"); fi
   done
   a=$(grep '^cpu[0-9]' /proc/stat); sleep 0.3; b=$(grep '^cpu[0-9]' /proc/stat)
+  # A core shares its execution units with its SMT siblings, so a core is as
+  # idle as its whole physical core: sum the idle time of all its siblings.
   for n in "${cores[@]}"; do
-    local i0 i1
-    i0=$(awk -v c="cpu$n" '$1==c {print $5}' <<<"$a"); i1=$(awk -v c="cpu$n" '$1==c {print $5}' <<<"$b")
-    if (( i1 - i0 > bestidle )); then bestidle=$(( i1 - i0 )); best=$n; fi
+    idle=0
+    sibs=$(cat "/sys/devices/system/cpu/cpu$n/topology/thread_siblings_list" 2>/dev/null || echo "$n")
+    for sib in $(tr ',' ' ' <<<"$sibs" | awk '{for (i=1;i<=NF;i++) { if (split($i,r,"-")==2) { for (j=r[1];j<=r[2];j++) printf "%d ", j } else printf "%s ", $i }}'); do
+      i0=$(awk -v c="cpu$sib" '$1==c {print $5}' <<<"$a"); i1=$(awk -v c="cpu$sib" '$1==c {print $5}' <<<"$b")
+      idle=$(( idle + i1 - i0 ))
+    done
+    if (( idle > bestidle )); then bestidle=$idle; best=$n; fi
   done
   echo "$best"
 }
