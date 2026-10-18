@@ -357,7 +357,167 @@ def decodeCases : List Case :=
          | _ => pure ()
        return ok && n == 812 }]
 
-def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ ioDigitCases ++ decodeCases ++ [
+/-- The body of Starlette's `test_multipart_request_mixed_files_and_data`. -/
+def mixedBody : ByteArray := bs ("--a7f7ac8d4e2e437c877bb7b8d7cc549c\r\n" ++
+  "Content-Disposition: form-data; name=\"field0\"\r\n\r\nvalue0\r\n" ++
+  "--a7f7ac8d4e2e437c877bb7b8d7cc549c\r\n" ++
+  "Content-Disposition: form-data; name=\"file\"; filename=\"file.txt\"\r\nContent-Type: text/plain\r\n\r\n" ++
+  "<file content>\r\n" ++
+  "--a7f7ac8d4e2e437c877bb7b8d7cc549c\r\n" ++
+  "Content-Disposition: form-data; name=\"field1\"\r\n\r\nvalue1\r\n" ++
+  "--a7f7ac8d4e2e437c877bb7b8d7cc549c--\r\n")
+
+/-- Feed `body` in chunks of `n` bytes, keeping each chunk's events. -/
+def feedAll (p : Starlette.MultipartStream) (body : ByteArray) (n : Nat) :
+    Except LimitError (Starlette.MultipartStream × List (Array Starlette.PartEvent)) := do
+  let mut p := p
+  let mut out := #[]
+  for i in [0:(body.size + n - 1) / n] do
+    let (p', evs) ← p.feed (body.extract (i * n) (i * n + n))
+    p := p'; out := out.push evs
+  return (p, out.toList)
+
+/-- A stream for boundary `B`. -/
+def streamB : Starlette.MultipartStream := .new ⟨⟨#[66]⟩, by decide⟩
+
+def evTag : Starlette.PartEvent → String
+  | .part i => s!"part:{String.fromUTF8! i.name}"
+  | .data b => s!"data:{String.fromUTF8! b}"
+  | .partEnd => "end"
+
+/-- Cases particular to the incremental parser: what each `feed` reports.
+Starlette's `MultiPartParser.parse` handles python-multipart's callbacks per
+chunk (`on_headers_finished` opens the part, `on_part_data` hands the bytes
+over, `on_part_end` closes it); these check the events in that order and that
+data is handed over as soon as it is known not to be a delimiter. -/
+def streamCases : List Case := [
+  { upstream := "starlette formparsers.py MultiPartParser.parse (on_headers_finished, on_part_data, on_part_end)"
+    name := "stream: events for the mixed body, in one chunk",
+    run := pure (match Starlette.MultipartStream.create (bs "multipart/form-data; boundary=a7f7ac8d4e2e437c877bb7b8d7cc549c") with
+      | .ok p => match feedAll p mixedBody mixedBody.size with
+        | .ok (p', [evs]) => p'.ended && evs.toList.map evTag ==
+            ["part:field0", "data:value0", "end", "part:file", "data:<file content>", "end", "part:field1", "data:value1", "end"]
+        | _ => false
+      | .error _ => false) },
+  { upstream := "starlette formparsers.py MultiPartParser.parse (on_part_data per chunk)"
+    name := "stream: data is handed over chunk by chunk, holding back only a possible delimiter",
+    run := pure (match feedAll (streamB) (bs ("--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n" ++
+          "hello\r\n-") ++ bs ("-world\r\n--B--\r\n")) 57 with
+      | .ok (p', chunks) => p'.ended && chunks.map (·.toList.map evTag) ==
+          [["part:a", "data:hello"], ["data:\r\n--world", "end"]]
+      | .error _ => false) },
+  { upstream := "starlette formparsers.py MultiPartParser.parse (stops at the first limit crossed)"
+    name := "stream: a limit stops the feed that crosses it",
+    run := pure (match Starlette.MultipartStream.create (bs "multipart/form-data; boundary=B") { maxFields := 1 } with
+      | .ok p => match p.feed (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n") with
+        | .ok (p, _) => (match p.feed (bs "--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nx") with
+          | .error (.tooManyFields 1) => true | _ => false)
+        | .error _ => false
+      | .error _ => false) },
+  { upstream := "starlette formparsers.py MultiPartParser.parse (epilogue ignored)"
+    name := "stream: after the closing delimiter, more chunks are ignored",
+    run := pure (match feedAll (streamB)
+          (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nv\r\n--B--\r\nepilogue --B\r\n") 3 with
+      | .ok (p', chunks) => p'.ended && (chunks.flatMap (·.toList.map evTag)).filter (· != "data:") != [] &&
+          String.join (chunks.flatMap (·.toList.filterMap fun e => match e with | .data b => some (String.fromUTF8! b) | _ => none)) == "v"
+      | .error _ => false) }
+]
+
+/-- Starlette's multipart cases, run by `mp`: the whole-buffer parser, or the
+incremental `MultipartStream` fed the body in chunks (`via` names which). -/
+def starletteMpCases (via : String) (mp : FormLimits → String → ByteArray → Except LimitError (List StarlettePart)) :
+    List Case := [
+  { upstream := "starlette tests/test_formparsers.py::test_missing_boundary_parameter"
+    name := s!"starlette missing boundary{via}",
+    run := pure (mp {} "multipart/form-data; charset=utf-8" (bs "x") == .error .missingBoundary) },
+  { upstream := "starlette tests/test_formparsers.py::test_multipart_boundary_exceeds_limit"
+    name := s!"starlette boundary too long{via}",
+    run := pure (let b := nTimes "X" 257
+      mp {} s!"multipart/form-data; boundary={b}" (bs s!"--{b}\r\n\r\n--{b}--\r\n") == .error .invalidMultipart) },
+  { upstream := "starlette tests/test_formparsers.py::test_multipart_headers_exceed_limit"
+    name := s!"starlette header count{via}",
+    run := pure (mp {} "multipart/form-data; boundary=boundary"
+      (bs ("--boundary\r\nContent-Disposition: form-data; name=\"field\"\r\n" ++
+        String.join ((List.range 8).map (s!"X-Extra-{·}: value\r\n")) ++ "\r\nvalue\r\n--boundary--\r\n")) == .error .invalidMultipart) },
+  { upstream := "starlette tests/test_formparsers.py::test_missing_name_parameter_on_content_disposition"
+    name := s!"starlette missing name{via}",
+    run := pure (mp {} "multipart/form-data; boundary=a7f7ac8d4e2e437c877bb7b8d7cc549c"
+      (bs "--a7f7ac8d4e2e437c877bb7b8d7cc549c\r\nContent-Disposition: form-data; =\"field0\"\r\n\r\nvalue0\r\n") == .error .missingName) },
+  { upstream := "starlette tests/test_formparsers.py::test_too_many_fields_raise"
+    name := s!"starlette too many fields{via}",
+    run := pure (mp {} "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 1001).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFields 1000)) },
+  { upstream := "starlette tests/test_formparsers.py::test_too_many_files_raise"
+    name := s!"starlette too many files{via}",
+    run := pure (mp {} "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 1001).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\"; filename=\"F{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1000)) },
+  { upstream := "starlette tests/test_formparsers.py::test_too_many_files_single_field_raise"
+    name := s!"starlette too many files, one field name{via}",
+    run := pure (mp {} "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 1001).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N\"; filename=\"F{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1000)) },
+  { upstream := "starlette tests/test_formparsers.py::test_multipart_request_mixed_files_and_data"
+    name := s!"starlette mixed files and data{via}",
+    run := pure (match mp {} "multipart/form-data; boundary=a7f7ac8d4e2e437c877bb7b8d7cc549c" mixedBody with
+      | .ok [f0, f, f1] =>
+        eqB f0.name (bs "field0") && eqB f0.data (bs "value0") && !f0.isFile &&
+        eqB f.name (bs "file") && (f.filename.any (eqB · (bs "file.txt"))) && eqB f.data (bs "<file content>") &&
+        (f.headers.any fun h => eqB h.1 (bs "content-type") && eqB h.2 (bs "text/plain")) &&
+        eqB f1.name (bs "field1") && eqB f1.data (bs "value1")
+      | _ => false) },
+  { upstream := "starlette tests/test_formparsers.py::test_too_many_files_and_fields_raise"
+    name := s!"starlette too many files and fields{via}",
+    run := pure (mp {} "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 1001).map fun i =>
+        s!"--B\r\nContent-Disposition: form-data; name=\"F{i}\"; filename=\"F{i}\";\r\n\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1000)) },
+  { upstream := "starlette tests/test_formparsers.py::test_max_fields_is_customizable_low_raises"
+    name := s!"starlette max_fields=1{via}",
+    run := pure (mp { maxFields := 1 } "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 2).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFields 1)) },
+  { upstream := "starlette tests/test_formparsers.py::test_max_files_is_customizable_low_raises"
+    name := s!"starlette max_files=1{via}",
+    run := pure (mp { maxFiles := 1 } "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 2).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"F{i}\"; filename=\"F{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1)) },
+  { upstream := "starlette tests/test_formparsers.py::test_max_fields_is_customizable_high"
+    name := s!"starlette max_fields=2000{via}",
+    run := pure (match mp { maxFields := 2000, maxFiles := 2000 } "multipart/form-data; boundary=B"
+      (bs (String.join ((List.range 2000).map fun i =>
+        s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"F{i}\"; filename=\"F{i}\";\r\n\r\n\r\n") ++ "--B--\r\n")) with
+      | .ok ps => ps.length == 4000 && (ps.getLast?.any fun p => p.isFile && p.data.size == 0)
+      | .error _ => false) },
+  { upstream := "starlette tests/test_formparsers.py::test_max_part_size_exceeds_limit"
+    name := s!"starlette part too large{via}",
+    run := pure (let b := "------------------------4K1ON9fZkj9uCUmqLHRbbR"
+      mp {} s!"multipart/form-data; boundary={b}"
+        (bs (s!"--{b}\r\nContent-Disposition: form-data; name=\"small\"\r\n\r\nsmall content\r\n--{b}\r\n" ++
+          "Content-Disposition: form-data; name=\"large\"\r\n\r\n" ++ nTimes "x" (1024 * 1024 + 1) ++ s!"\r\n--{b}--\r\n"))
+        == .error (.partTooLarge (1024 * 1024))) },
+  { upstream := "starlette formparsers.py MultiPartParser (counts at headers, size on data)"
+    name := s!"starlette multipart: the first limit crossed is reported{via}",
+    run := pure (
+      mp { maxFields := 1, maxPartSize := 3 } "multipart/form-data; boundary=B"
+        (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nxxxxx\r\n--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nx\r\n--B--\r\n")
+        == .error (.partTooLarge 3) &&
+      mp { maxFields := 1, maxPartSize := 3 } "multipart/form-data; boundary=B"
+        (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nxxxxx\r\n--B--\r\n")
+        == .error (.tooManyFields 1)) },
+  { upstream := "starlette tests/test_formparsers.py::test_max_part_size_exceeds_custom_limit"
+    name := s!"starlette part too large (10KB){via}",
+    run := pure (let b := "------------------------4K1ON9fZkj9uCUmqLHRbbR"
+      mp { maxPartSize := 10240 } s!"multipart/form-data; boundary={b}"
+        (bs (s!"--{b}\r\nContent-Disposition: form-data; name=\"small\"\r\n\r\nsmall content\r\n--{b}\r\n" ++
+          "Content-Disposition: form-data; name=\"large\"\r\n\r\n" ++ nTimes "x" 10241 ++ s!"\r\n--{b}--\r\n"))
+        == .error (.partTooLarge 10240)) }
+]
+
+/-- `MultipartStream` fed `body` in chunks of `n` bytes, through the public API. -/
+def streamMp (n : Nat) (lim : FormLimits) (ct : String) (body : ByteArray) : Except LimitError (List StarlettePart) :=
+  let chunks := (List.range ((body.size + n - 1) / n)).map fun i => body.extract (i * n) (i * n + n)
+  API.Starlette.parseMultipartChunks lim (bs ct) chunks |>.map (·.1)
+
+def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ ioDigitCases ++ decodeCases ++
+    starletteMpCases "" starletteMp ++ starletteMpCases " (streamed, 1-byte chunks)" (streamMp 1) ++
+    starletteMpCases " (streamed, 7-byte chunks)" (streamMp 7) ++
+    starletteMpCases " (streamed, 64 KiB chunks)" (streamMp 65536) ++ streamCases ++ [
   -- Querystring parser
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_simple_querystring"
     name := "querystring simple", run := qsIs {} ["foo=bar"] [("foo", "bar")] },
@@ -693,57 +853,6 @@ def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases
   { upstream := "starlette tests/test_formparsers.py::test_urlencoded_max_part_size_is_customizable"
     name := "starlette urlencoded max_part_size=10KB",
     run := pure (starletteUrl { maxPartSize := 10240 } ("field=" ++ nTimes "x" 10241) == .error (.fieldTooLarge 10240)) },
-  { upstream := "starlette tests/test_formparsers.py::test_missing_boundary_parameter"
-    name := "starlette missing boundary",
-    run := pure (starletteMp {} "multipart/form-data; charset=utf-8" (bs "x") == .error .missingBoundary) },
-  { upstream := "starlette tests/test_formparsers.py::test_multipart_boundary_exceeds_limit"
-    name := "starlette boundary too long",
-    run := pure (let b := nTimes "X" 257
-      starletteMp {} s!"multipart/form-data; boundary={b}" (bs s!"--{b}\r\n\r\n--{b}--\r\n") == .error .invalidMultipart) },
-  { upstream := "starlette tests/test_formparsers.py::test_multipart_headers_exceed_limit"
-    name := "starlette header count",
-    run := pure (starletteMp {} "multipart/form-data; boundary=boundary"
-      (bs ("--boundary\r\nContent-Disposition: form-data; name=\"field\"\r\n" ++
-        String.join ((List.range 8).map (s!"X-Extra-{·}: value\r\n")) ++ "\r\nvalue\r\n--boundary--\r\n")) == .error .invalidMultipart) },
-  { upstream := "starlette tests/test_formparsers.py::test_missing_name_parameter_on_content_disposition"
-    name := "starlette missing name",
-    run := pure (starletteMp {} "multipart/form-data; boundary=a7f7ac8d4e2e437c877bb7b8d7cc549c"
-      (bs "--a7f7ac8d4e2e437c877bb7b8d7cc549c\r\nContent-Disposition: form-data; =\"field0\"\r\n\r\nvalue0\r\n") == .error .missingName) },
-  { upstream := "starlette tests/test_formparsers.py::test_too_many_fields_raise"
-    name := "starlette too many fields",
-    run := pure (starletteMp {} "multipart/form-data; boundary=B"
-      (bs (String.join ((List.range 1001).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFields 1000)) },
-  { upstream := "starlette tests/test_formparsers.py::test_too_many_files_raise"
-    name := "starlette too many files",
-    run := pure (starletteMp {} "multipart/form-data; boundary=B"
-      (bs (String.join ((List.range 1001).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\"; filename=\"F{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1000)) },
-  { upstream := "starlette tests/test_formparsers.py::test_too_many_files_and_fields_raise"
-    name := "starlette too many files and fields",
-    run := pure (starletteMp {} "multipart/form-data; boundary=B"
-      (bs (String.join ((List.range 1001).map fun i =>
-        s!"--B\r\nContent-Disposition: form-data; name=\"F{i}\"; filename=\"F{i}\";\r\n\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1000)) },
-  { upstream := "starlette tests/test_formparsers.py::test_max_fields_is_customizable_low_raises"
-    name := "starlette max_fields=1",
-    run := pure (starletteMp { maxFields := 1 } "multipart/form-data; boundary=B"
-      (bs (String.join ((List.range 2).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFields 1)) },
-  { upstream := "starlette tests/test_formparsers.py::test_max_files_is_customizable_low_raises"
-    name := "starlette max_files=1",
-    run := pure (starletteMp { maxFiles := 1 } "multipart/form-data; boundary=B"
-      (bs (String.join ((List.range 2).map fun i => s!"--B\r\nContent-Disposition: form-data; name=\"F{i}\"; filename=\"F{i}\";\r\n\r\n\r\n"))) == .error (.tooManyFiles 1)) },
-  { upstream := "starlette tests/test_formparsers.py::test_max_fields_is_customizable_high"
-    name := "starlette max_fields=2000",
-    run := pure (match starletteMp { maxFields := 2000, maxFiles := 2000 } "multipart/form-data; boundary=B"
-      (bs (String.join ((List.range 2000).map fun i =>
-        s!"--B\r\nContent-Disposition: form-data; name=\"N{i}\";\r\n\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"F{i}\"; filename=\"F{i}\";\r\n\r\n\r\n") ++ "--B--\r\n")) with
-      | .ok ps => ps.length == 4000 && (ps.getLast?.any fun p => p.isFile && p.data.size == 0)
-      | .error _ => false) },
-  { upstream := "starlette tests/test_formparsers.py::test_max_part_size_exceeds_limit"
-    name := "starlette part too large",
-    run := pure (let b := "------------------------4K1ON9fZkj9uCUmqLHRbbR"
-      starletteMp {} s!"multipart/form-data; boundary={b}"
-        (bs (s!"--{b}\r\nContent-Disposition: form-data; name=\"small\"\r\n\r\nsmall content\r\n--{b}\r\n" ++
-          "Content-Disposition: form-data; name=\"large\"\r\n\r\n" ++ nTimes "x" (1024 * 1024 + 1) ++ s!"\r\n--{b}--\r\n"))
-        == .error (.partTooLarge (1024 * 1024))) },
   { upstream := "starlette tests/test_formparsers.py::test_urlencoded_limits_stop_parsing_within_a_single_chunk"
     name := "starlette urlencoded stops at the first excess",
     run := do
@@ -761,23 +870,7 @@ def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases
   { upstream := "starlette formparsers.py FormParser (size checked on data, count at field end)"
     name := "starlette urlencoded: the first limit crossed is reported",
     run := pure (starletteUrl { maxFields := 1, maxPartSize := 3 } "a=1&bbbb=2" == .error (.fieldTooLarge 3) &&
-      starletteUrl { maxFields := 1, maxPartSize := 3 } "a=1&b=2" == .error (.tooManyFields 1)) },
-  { upstream := "starlette formparsers.py MultiPartParser (counts at headers, size on data)"
-    name := "starlette multipart: the first limit crossed is reported",
-    run := pure (
-      starletteMp { maxFields := 1, maxPartSize := 3 } "multipart/form-data; boundary=B"
-        (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nxxxxx\r\n--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nx\r\n--B--\r\n")
-        == .error (.partTooLarge 3) &&
-      starletteMp { maxFields := 1, maxPartSize := 3 } "multipart/form-data; boundary=B"
-        (bs "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\nxxxxx\r\n--B--\r\n")
-        == .error (.tooManyFields 1)) },
-  { upstream := "starlette tests/test_formparsers.py::test_max_part_size_exceeds_custom_limit"
-    name := "starlette part too large (10KB)",
-    run := pure (let b := "------------------------4K1ON9fZkj9uCUmqLHRbbR"
-      starletteMp { maxPartSize := 10240 } s!"multipart/form-data; boundary={b}"
-        (bs (s!"--{b}\r\nContent-Disposition: form-data; name=\"small\"\r\n\r\nsmall content\r\n--{b}\r\n" ++
-          "Content-Disposition: form-data; name=\"large\"\r\n\r\n" ++ nTimes "x" 10241 ++ s!"\r\n--{b}--\r\n"))
-        == .error (.partTooLarge 10240)) }
+      starletteUrl { maxFields := 1, maxPartSize := 3 } "a=1&b=2" == .error (.tooManyFields 1)) }
 ]
 
 def main : IO UInt32 := do

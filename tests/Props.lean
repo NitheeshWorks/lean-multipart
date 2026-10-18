@@ -166,6 +166,57 @@ def genParts (b : Boundary) (r : Rng) : List RawPart × Rng := Id.run do
     ps := ps.push { headers := hs.toList, body := toBA body }
   return (ps.toList, r)
 
+/-! ## The incremental Starlette parser (`MultipartStream`) -/
+
+def spView (p : StarlettePart) : Bytes × Option Bytes × List (Bytes × Bytes) × Bytes :=
+  (p.name.data.toList, p.filename.map (·.data.toList),
+   p.headers.map (fun h => (h.1.data.toList, h.2.data.toList)), p.data.data.toList)
+
+/-- Same result: equal parts, or the same error. -/
+def sameSp (a b : Except LimitError (List StarlettePart)) : Bool :=
+  match a, b with
+  | .ok x, .ok y => x.map spView == y.map spView
+  | .error e1, .error e2 => e1 == e2
+  | _, _ => false
+
+def ctB : ByteArray := toBA (ascii "multipart/form-data; boundary=b")
+
+/-- Random Starlette form parts: fields and files with short names and bodies
+over a CR/LF/hyphen/`b` alphabet, so near-miss delimiters (`CR LF - - b` cut
+short or followed by junk) are common; a part whose body holds the delimiter
+is emptied. Sometimes a part has no `name`, or the body is cut or junk is
+appended, so errors are exercised as well. -/
+def genForm (r : Rng) : ByteArray × Rng := Id.run do
+  let (n, r) := r.nat 5
+  let mut r := r
+  let mut ps : Array RawPart := #[]
+  for i in [0:n] do
+    let (kind, r1) := r.nat 6
+    let (body, r2) := genFrom #[13, 10, 45, 98, 120, 0, 255] 24 r1
+    r := r2
+    let body := if decide (shortB.delimL <:+: body) then [] else body
+    let p := if kind == 0 then { headers := [(toBA (ascii "content-disposition"), toBA (ascii "form-data"))], body := toBA body }
+      else formPart (toBA (ascii s!"f{i}")) (if kind ≥ 4 then some (toBA (ascii "a.txt")) else none) none (toBA body)
+    ps := ps.push p
+  let full := (Mp.print shortB ps.toList).data.toList
+  let (cut, r1) := r.nat 8
+  let (junk, r2) := genFrom #[13, 10, 45, 98] 6 r1
+  let full := if cut == 0 then full.take (full.length / 2) else if cut == 1 then full ++ junk else full
+  return (toBA full, r2)
+
+def oneByteChunks (b : ByteArray) : List ByteArray := b.data.toList.map (fun c => ⟨#[c]⟩)
+
+/-- Feed chunks, checking that no feed's events carry more part data than the
+chunk plus a held-back partial delimiter (`dlen` bytes). -/
+def boundedFeeds (p : Starlette.MultipartStream) (dlen : Nat) : List ByteArray → Bool
+  | [] => true
+  | c :: rest =>
+    match p.feed c with
+    | .error _ => true
+    | .ok (p', evs) =>
+      let n := evs.foldl (fun n e => match e with | .data b => n + b.size | _ => n) 0
+      decide (n ≤ c.size + dlen) && boundedFeeds p' dlen rest
+
 /-! ## Properties -/
 
 def properties : List Property := [
@@ -335,6 +386,37 @@ def properties : List Property := [
         | .error e1, .error e2 => e1 == e2
         | _, _ => false
       return (bif ok && ok2 then none else some (showB body), r) },
+  { name := "smoke MultipartStream: random chunking = whole-buffer Starlette parse (parseChunks_eq)"
+    check := fun r => Id.run do
+      let (body, r) := genForm r
+      let (chunks, r) := genChunks body.data.toList r
+      let (m, r) := r.nat 4
+      let lim : FormLimits := { maxFields := 1 + m, maxFiles := 1 + m, maxPartSize := 4 + 4 * m }
+      let whole := Starlette.parseMultipartRaw lim ctB body
+      let ok := sameSp (Starlette.MultipartStream.parseChunks lim ctB (chunks.map toBA)) whole &&
+        sameSp (API.Starlette.parseMultipartChunks lim ctB (chunks.map toBA) |>.map (·.1)) whole
+      return (bif ok then none else some (showB body.data.toList), r) },
+  { name := "smoke MultipartStream: 1-byte chunks of hostile CR / near-miss bodies = whole-buffer parse"
+    check := fun r => Id.run do
+      let (body, r) := genForm r
+      let lim : FormLimits := { maxFields := 3, maxFiles := 3, maxPartSize := 12 }
+      let ok := sameSp (Starlette.MultipartStream.parseChunks lim ctB (oneByteChunks body)) (Starlette.parseMultipartRaw lim ctB body)
+      return (bif ok then none else some (showB body.data.toList), r) },
+  { name := "smoke MultipartStream: random Content-Type and junk body agree with whole-buffer parse"
+    check := fun r => Id.run do
+      let (ct, r) := genFrom (asciiArr "multipart/form-data; boundary=b\"") 40 r
+      let (junk, r) := genFrom #[13, 10, 45, 98, 120] 30 r
+      let (chunks, r) := genChunks junk r
+      let ok := sameSp (Starlette.MultipartStream.parseChunks {} (toBA ct) (chunks.map toBA))
+        (Starlette.parseMultipartRaw {} (toBA ct) (toBA junk))
+      return (bif ok then none else some s!"{showB ct} {showB junk}", r) },
+  { name := "tested MultipartStream: each feed's part data is at most the chunk plus a held-back delimiter prefix"
+    check := fun r => Id.run do
+      let (body, r) := genForm r
+      let (chunks, r) := genChunks body.data.toList r
+      let ok := boundedFeeds (Starlette.MultipartStream.new shortB { maxPartSize := 1000 }) shortB.delimL.length
+        (chunks.map toBA)
+      return (bif ok then none else some (showB body.data.toList), r) },
   { name := "tested base64 decoder inverts standard encoding (random bytes)"
     check := fun r => Id.run do
       let (l, r) := genFrom allBytes 40 r
