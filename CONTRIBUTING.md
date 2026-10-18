@@ -168,7 +168,7 @@ Each is a `status = "deviation"` row in `docs/traceability.toml`.
 10. **`parse_form`** is `parseFormStream headers stream onField onFile
     chunkSize` in `IO`: it reads the stream as upstream does (chunks of
     `chunk_size`, never past `Content-Length`, which is read as Python's
-    `int()` reads it) and raises upstream's error classes and messages
+    `int()` reads it, 4300-digit limit included, in one linear pass: `pyInt`) and raises upstream's error classes and messages
     (checked against python-multipart 0.0.32 by the `io:` conformance cases).
     As in deviation 6, the callbacks run once the whole body is read: when the
     body has an error none runs, where upstream calls `on_field` / `on_file`

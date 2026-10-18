@@ -1,4 +1,5 @@
 import Std.Http
+import LeanMultipart.RepoImpl.Form
 
 /-!
 # `wsgiref`, for the examples
@@ -49,8 +50,11 @@ abbrev App (α : Type) := Environ → StartResponse → IO (List α)
 /-- `wsgiref.validate.validator(app)`: here the application itself. -/
 def validator {α : Type} (app : App α) : App α := app
 
-/-- Python's `int(...)` on a header value. -/
-def int (b : ByteArray) : Nat := ((String.fromUTF8? b).getD "").trimAscii.toString.toNat!
+/-- Python's `int(...)` on a header value (bounded as Python bounds it,
+`LeanMultipart.pyInt`); a value `int()` refuses, or a negative one, is 0. -/
+def int (b : ByteArray) : Nat := match LeanMultipart.pyInt b with
+  | .ok n => n.toNat
+  | .error _ => 0
 
 /-- The response of one call: status line, headers, body. -/
 structure Reply where

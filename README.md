@@ -178,6 +178,7 @@ a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 | one 50 MB multipart field | `partTooLarge` | 3 ms | 64 MB |
 | 1,000,000 tiny parts (58 MB) | `tooManyFields` | 9 ms | 68 MB |
 | 1,000,000 `a=b&` (4 MB) | `tooManyFields` | < 1 ms | 13 MB |
+| a 10 MB `Content-Length` value | refused (Python's 4300-digit limit) | 230 ms | 22 MB |
 | 50 MB file part, whole body | parsed | 150 ms | 115 MB |
 | 50 MB random binary file part, whole body | parsed | 260 ms | 220 MB |
 | 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 150 ms | 68 MB |

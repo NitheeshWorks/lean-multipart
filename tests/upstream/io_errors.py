@@ -22,6 +22,12 @@ mp = b'--B\r\nContent-Disposition: form-data; name="a"\r\n\r\nx\r\n--B\r\nBad He
 form("bad header after a field", {"Content-Type": "multipart/form-data; boundary=B"}, mp)
 for cl in ["-1", "x", "+3", " 3 ", "3_0", "1__0", "_3", "3_", "-0", "", "\t3\n"]:
     form(f"Content-Length {cl!r}", {"Content-Type": URL, "Content-Length": cl.encode()}, b"a=b&c=d" * 5)
+# Python's int() refuses more than 4300 digits (sign and underscores not counted);
+# the syntax is checked first, and a long invalid literal's repr is cut to 200.
+for name, cl in [("4300 digits", "1" * 4300), ("4301 digits", "1" * 4301),
+                 ("4301 digits with sign and underscores", "-" + "1_" * 4300 + "1"),
+                 ("5000 digits then x", "1" * 5000 + "x")]:
+    form(f"Content-Length {name}", {"Content-Type": URL, "Content-Length": cl.encode()}, b"a=b&c=d" * 5)
 form("chunk_size 0", {"Content-Type": URL}, b"a=b", chunk_size=0)
 form("no boundary", {"Content-Type": "multipart/form-data"}, b"")
 form("no Content-Type", {}, b"")

@@ -36,9 +36,12 @@ def MultipartErrorKind.message : MultipartErrorKind → String
 instance : ToString MultipartParseError where
   toString e := s!"MultipartParseError: {e.error.kind.message} at {e.offset}"
 
-/-- Python's `repr` of a byte string, as in `b'x'`. -/
-def pyBytesRepr (b : ByteArray) : String :=
-  let q : Char := if b.data.contains 39 && !b.data.contains 34 then '"' else '\''
+/-- Python's `repr` of a byte string, as in `b'x'`, cut to `limit`
+characters as Python's `%.200R` cuts it (the quote is chosen from the
+whole value; only the first `limit` bytes are rendered). -/
+def pyBytesRepr (b : ByteArray) (limit : Option Nat := none) : String :=
+  let has (c : UInt8) := scanFor b c b.size 0 < b.size
+  let q : Char := if has 39 && !has 34 then '"' else '\''
   let hex (n : Nat) : Char := "0123456789abcdef".toList[n]!
   let esc (c : UInt8) : String :=
     if c == 9 then "\\t" else if c == 10 then "\\n" else if c == 13 then "\\r"
@@ -46,7 +49,10 @@ def pyBytesRepr (b : ByteArray) : String :=
     else if c == 39 && q == '\'' then "\\'"
     else if 32 ≤ c && c < 127 then String.singleton (Char.ofNat c.toNat)
     else String.ofList ['\\', 'x', hex (c.toNat / 16), hex (c.toNat % 16)]
-  "b" ++ String.singleton q ++ String.join (b.data.toList.map esc) ++ String.singleton q
+  match limit with
+  | none => "b" ++ String.singleton q ++ String.join (b.data.toList.map esc) ++ String.singleton q
+  | some n => String.ofList (("b" ++ String.singleton q ++ String.join ((b.extract 0 n).data.toList.map esc) ++
+      String.singleton q).toList.take n)
 
 instance : ToString FormError where
   toString
@@ -58,8 +64,9 @@ instance : ToString FormError where
     | .badBoundary => "FormParserError: Invalid boundary"
     | .unknownContentType ct => s!"FormParserError: Unknown Content-Type: {ct}"
     | .noContentType => "ValueError: No Content-Type header given!"
-    | .badContentLength v => s!"ValueError: invalid literal for int() with base 10: {pyBytesRepr v}"
+    | .badContentLength v => s!"ValueError: invalid literal for int() with base 10: {pyBytesRepr v (some 200)}"
     | .negativeContentLength => "ValueError: Content-Length must be non-negative"
+    | .contentLengthDigits n => s!"ValueError: Exceeds the limit ({pyIntMaxDigits} digits) for integer string conversion: value has {n} digits; use sys.set_int_max_str_digits() to increase the limit"
     | .missingFieldName => "FormParserError: Field name not found in Content-Disposition"
     | .badCte _ => "FormParserError: Unknown Content-Transfer-Encoding"
     | .decode _ => "DecodeError: invalid base64 data"

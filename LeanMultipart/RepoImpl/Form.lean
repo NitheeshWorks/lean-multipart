@@ -211,34 +211,65 @@ def createFormParser (headers : Headers) (config : FormParserConfig := {})
   let kind ← FormKind.select (latin1Decode ⟨ctype.toArray⟩) boundary
   pure (FormParser.ofKind config kind fileName)
 
+/-- Why Python's `int()` refuses a byte string. -/
+inductive PyIntError where
+  /-- "invalid literal for int() with base 10: …" -/
+  | invalid
+  /-- More than `pyIntMaxDigits` digits (Python's `sys.get_int_max_str_digits()`). -/
+  | tooManyDigits (n : Nat)
+
+/-- Python's default limit on the digits `int()` converts. -/
+def pyIntMaxDigits : Nat := 4300
+
+/-- Where `pyInt`'s scan is: before the number, after the sign, in the
+digits, just after an underscore, after the number, or refused. -/
+inductive PyIntPhase where
+  | lead | sign | digits | underscore | trail | bad
+  deriving DecidableEq
+
+/-- `pyInt`'s scan state: the phase, the sign, the digits seen, and the
+value of the digits while there are at most `pyIntMaxDigits` of them. -/
+structure PyIntScan where
+  phase : PyIntPhase := .lead
+  neg : Bool := false
+  count : Nat := 0
+  value : Nat := 0
+
+/-- One byte of Python's `int()` syntax. -/
+def PyIntScan.step (s : PyIntScan) (c : UInt8) : PyIntScan :=
+  let ws := c == 32 || (9 ≤ c && c ≤ 13)
+  let digit := 48 ≤ c && c ≤ 57
+  let addDigit (s : PyIntScan) : PyIntScan :=
+    { s with phase := .digits, count := s.count + 1,
+             value := if s.count < pyIntMaxDigits then s.value * 10 + (c - 48).toNat else s.value }
+  match s.phase with
+  | .lead => if ws then s else if c == 45 then { s with phase := .sign, neg := true }
+    else if c == 43 then { s with phase := .sign } else if digit then addDigit s else { s with phase := .bad }
+  | .sign | .underscore => if digit then addDigit s else { s with phase := .bad }
+  | .digits => if digit then addDigit s else if c == 95 then { s with phase := .underscore }
+    else if ws then { s with phase := .trail } else { s with phase := .bad }
+  | .trail => if ws then s else { s with phase := .bad }
+  | .bad => s
+
 /-- Python's `int()` on a byte string: surrounding ASCII whitespace, an
-optional sign, then decimal digits with single underscores between them. -/
-def pyInt? (b : ByteArray) : Option Int :=
-  let isWs (c : UInt8) := c == 32 || (9 ≤ c && c ≤ 13)
-  let l := ((b.data.toList.dropWhile isWs).reverse.dropWhile isWs).reverse
-  let (neg, digits) := match l with
-    | 45 :: r => (true, r)
-    | 43 :: r => (false, r)
-    | r => (false, r)
-  let isDigit (c : UInt8) := 48 ≤ c && c ≤ 57
-  -- digits, with `_` only between two digits
-  let rec ok : List UInt8 → Bool
-    | [] => false
-    | [c] => isDigit c
-    | c :: 95 :: r => isDigit c && (match r with | d :: _ => isDigit d | [] => false) && ok r
-    | c :: r => isDigit c && ok r
-  if ok digits then
-    let n : Nat := (digits.filter isDigit).foldl (fun acc c => acc * 10 + (c - 48).toNat) 0
-    some (if neg then -(n : Int) else n)
-  else none
+optional sign, then decimal digits with single underscores between them,
+at most 4300 digits (counted without sign and underscores, as Python counts
+them). One pass over the packed bytes; digits past the limit are counted,
+not converted, so a long value costs linear time and constant space. -/
+def pyInt (b : ByteArray) : Except PyIntError Int :=
+  let s := bytesFold PyIntScan.step b b.size 0 {}
+  if s.phase != .digits && s.phase != .trail then .error .invalid
+  else if pyIntMaxDigits < s.count then .error (.tooManyDigits s.count)
+  else .ok (if s.neg then -(s.value : Int) else s.value)
 
 /-- `Content-Length`, read as upstream's `parse_form` reads it. -/
 def contentLength? (headers : Headers) : Except FormError (Option Nat) :=
   match headers.get "Content-Length" with
   | none => .ok none
-  | some cl => match pyInt? cl with
-    | none => .error (.badContentLength cl)
-    | some n => if n < 0 then .error .negativeContentLength else .ok (some n.toNat)
+  | some cl => match pyInt cl with
+    | .error .invalid => .error (.badContentLength cl)
+    | .error (.tooManyDigits n) => .error (.contentLengthDigits n)
+    | .ok n => if n < 0 then .error .negativeContentLength else .ok (some n.toNat)
 
 /-- Upstream's `parse_form(headers, input_stream, on_field, on_file)`, over
 a body in memory: the fields and files, reading at most `Content-Length`

@@ -75,6 +75,9 @@ inductive FormError where
   | badContentLength (value : ByteArray)
   /-- "Content-Length must be non-negative" -/
   | negativeContentLength
+  /-- Python's `int()` refuses more than 4300 digits ("Exceeds the limit
+  (4300 digits) for integer string conversion: value has N digits; …"). -/
+  | contentLengthDigits (n : Nat)
   /-- "Field name not found in Content-Disposition" -/
   | missingFieldName
   /-- "Unknown Content-Transfer-Encoding" (only with `errorOnBadCte`) -/

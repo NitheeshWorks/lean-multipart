@@ -306,7 +306,21 @@ def ioCases : List Case :=
     ioCase s!"Content-Length {repr cl}" up
       (formLine ((fields up).headD "") (urlCt ++ [("Content-Length", bs cl)]) clBody))
 
-def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ [
+/-- Python's 4300-digit limit on `int()` (golden lines from `io_errors.py`). -/
+def ioDigitCases : List Case :=
+  [
+    ("4300 digits", nTimes "1" 4300,
+      "Content-Length 4300 digits|ok|||a,c,c,c,c,c"),
+    ("4301 digits", nTimes "1" 4301,
+      "Content-Length 4301 digits|raise|ValueError|Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit|"),
+    ("4301 digits with sign and underscores", "-" ++ nTimes "1_" 4300 ++ "1",
+      "Content-Length 4301 digits with sign and underscores|raise|ValueError|Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit|"),
+    ("5000 digits then x", nTimes "1" 5000 ++ "x",
+      "Content-Length 5000 digits then x|raise|ValueError|invalid literal for int() with base 10: b'111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111|")
+  ].map fun (name, cl, up) =>
+    ioCase s!"Content-Length {name}" up (formLine ((fields up).headD "") (urlCt ++ [("Content-Length", bs cl)]) clBody)
+
+def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ ioDigitCases ++ [
   -- Querystring parser
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_simple_querystring"
     name := "querystring simple", run := qsIs {} ["foo=bar"] [("foo", "bar")] },

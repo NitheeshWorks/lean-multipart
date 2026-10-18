@@ -71,6 +71,9 @@ def body : String → ByteArray
   | "file50" | "stream50" => build [.bytes (u "--boundary\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\"\r\n\r\n"),
       .fill 120 (50 * mb), .bytes (u "\r\n--boundary--\r\n")]
   | "percent50" => build [.fill 37 (50 * mb)]
+  | "cl1m" => build [.fill 49 mb]
+  | "cl10m" => build [.fill 49 (10 * mb)]
+  | "cl10mx" => build [.fill 49 (10 * mb), .bytes (u "x")]
   | "options" => build [.bytes (u "text/plain"), .rep (u "; a=b") 2000000]
   | _ => ByteArray.empty
 
@@ -96,6 +99,10 @@ def run (c : String) (b : ByteArray) : String :=
     return s!"streamed {total} data bytes"
   | "percent50" => s!"{(percentDecode (percentEncode b)).size == b.size}"
   | "options" => s!"{(parseOptionsHeader b).2.entries.length} params"
+  | "cl1m" | "cl10m" | "cl10mx" =>
+    match parseForm [("Content-Type", u "application/x-www-form-urlencoded"), ("Content-Length", b)] (u "a=b") with
+    | .error e => (toString e).take 60 |>.toString
+    | .ok _ => "accepted"
   | c => s!"unknown case {c}"
 
 /-- Per case: the time bound in ms, and the peak-memory bound as a multiple
@@ -108,6 +115,9 @@ def bounds : String → Nat × Nat
   | "url50" | "mp50" | "qsMany" => (500, 3)
   | "mpMany" => (1000, 3)
   | "options" => (100, 3)
+  -- a huge Content-Length is refused in linear time (Python's 4300-digit limit)
+  | "cl1m" => (250, 3)
+  | "cl10m" | "cl10mx" => (1000, 3)
   | "file50" | "stream50" => (910, 3)
   | "fileBin50" => (910, 4)
   | "percent50" => (10000, 8)
