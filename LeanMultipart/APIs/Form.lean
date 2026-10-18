@@ -2,6 +2,7 @@ import LeanMultipart.Specifications.Multipart
 import LeanMultipart.Proofs.Form
 import LeanMultipart.APIs.Multipart
 import LeanMultipart.Proofs.Unquote
+import LeanMultipart.Proofs.Incremental
 
 /-!
 # API: forms (upstream's `FormParser`) and Starlette's limited parsers
@@ -13,6 +14,13 @@ import LeanMultipart.Proofs.Unquote
 | `API.Starlette.parseMultipartForm lim contentType body` | `Except LimitError {ps // Spec.MultipartWithinLimits lim ps}` |
 | `API.Starlette.parseUrlencodedForm lim body` | `Except LimitError {items // ∃ fs, Spec.UrlencodedWithinLimits lim fs ∧ items = fs.map decodeField}` |
 | `API.Starlette.decodeField f` | Starlette's `unquote_plus(raw.decode("latin-1"))` of a name and value |
+| `API.Starlette.parseMultipartChunks lim contentType chunks` | `Except LimitError {ps // Spec.MultipartWithinLimits lim ps ∧ parseMultipartRaw lim contentType (concatChunks chunks) = .ok ps}` |
+
+`Starlette.MultipartStream.create / feed` is the incremental multipart
+interface a server drives from its transport (`RepoImpl/Incremental.lean`);
+`Starlette.MultipartStream.parseChunks_eq` proves every chunking gives the
+whole-buffer parse, and `MultipartStream.feed_retains` that no part data is
+kept between chunks.
 
 `FormParser.ofKind / write / finalize` and `createFormParser` are the streaming
 interface; `FormParser.write_chunks` proves any chunking equals one write.
@@ -62,6 +70,19 @@ def parseMultipartForm (lim : FormLimits) (contentType body : ByteArray) :
   match h : LeanMultipart.Starlette.parseMultipartRaw lim contentType body with
   | .error e => .error e
   | .ok ps => .ok ⟨ps, LeanMultipart.Starlette.parseMultipartRaw_ok lim contentType body ps h⟩
+
+/-- Starlette's multipart parse of a body that arrives in chunks, through the
+incremental parser. The refinement: the parts are within the limits, and they
+are the parts of the whole-buffer parse of the chunks' concatenation. -/
+def parseMultipartChunks (lim : FormLimits) (contentType : ByteArray) (chunks : List ByteArray) :
+    Except LimitError {ps : List StarlettePart // Spec.MultipartWithinLimits lim ps ∧
+      LeanMultipart.Starlette.parseMultipartRaw lim contentType (concatChunks chunks) = .ok ps} :=
+  match h : LeanMultipart.Starlette.MultipartStream.parseChunks lim contentType chunks with
+  | .error e => .error e
+  | .ok ps =>
+    have h' : LeanMultipart.Starlette.parseMultipartRaw lim contentType (concatChunks chunks) = .ok ps := by
+      rw [← LeanMultipart.Starlette.MultipartStream.parseChunks_eq]; exact h
+    .ok ⟨ps, LeanMultipart.Starlette.parseMultipartRaw_ok lim contentType _ ps h', h'⟩
 
 end Starlette
 end LeanMultipart.API

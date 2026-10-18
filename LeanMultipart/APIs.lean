@@ -31,6 +31,13 @@ import LeanMultipart.APIs.Form
 * `Starlette.UrlencodedParser`, `Starlette.MultipartFormParser`: Starlette's
   form parsers, streaming, with `max_fields` / `max_files` / `max_part_size`
   enforced as bytes arrive (`.write`, `.error?`, `.finalize`).
+* `Starlette.MultipartStream`: Starlette's `MultiPartParser` as an
+  incremental parser for a server to drive from its transport:
+  `.create contentType lim` (or `.new boundary lim`), `.feed chunk` giving
+  `PartEvent`s (`.part info`, `.data bytes`, `.partEnd`) or the
+  `LimitError`; `PartInfo` (`name`, `filename`, `headers`, `isFile`). It
+  keeps no part data between chunks, so a file part can be spooled as it
+  arrives.
 * `Boundary` (with `Boundary.ofBytes?`), `RawPart`, `Mp.parse`, `Mp.print`,
   `Qs.parse`, `percentEncode`, `percentDecode`, `quotePlus`, `unquotePlus`,
   `urlencodeB`, `urldecodeB`, `formPart`, `dispositionValue`.

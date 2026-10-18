@@ -25,9 +25,32 @@ def WFPart (cx : Ctx) (p : RawPart) : Prop :=
 def Fits (cx : Ctx) (ps : List RawPart) : Prop :=
   ∀ m, cx.cfg.maxSize = some m → (printL cx.boundary ps).length ≤ m
 
+/-- Phases inside a header line (its name or value is being read). -/
+def inHeader : MPhase → Bool
+  | .headerField | .headerValueStart | .headerValue => true
+  | _ => false
+
+/-- Phases where no header line is being read (the header byte count is 0). -/
+def noHeader : MPhase → Bool
+  | .headerField | .headerValueStart | .headerValue | .failed _ => false
+  | _ => true
+
+/-- The machine's header buffers are within `max_header_count` and
+`max_header_size`. -/
+def HdrInv (cx : Ctx) (s : MState) : Prop :=
+  s.hdrCount ≤ cx.cfg.maxHeaderCount ∧ s.hdrSize ≤ cx.cfg.maxHeaderSize ∧ s.name.size + s.value.size ≤ s.hdrSize ∧
+  (∀ h ∈ s.headers.toList, h.1.size + h.2.size ≤ cx.cfg.maxHeaderSize) ∧
+  s.headers.size + (if inHeader s.phase then 1 else 0) ≤ s.hdrCount ∧
+  (noHeader s.phase = true → s.hdrSize = 0)
+
 end LeanMultipart.Mp
 
 namespace LeanMultipart.Starlette
+
+/-- What the parser keeps between chunks: no part data, no completed part,
+and header buffers within `max_header_count` and `max_header_size`. -/
+def Retained (p : MultipartStream) : Prop :=
+  p.st.mp.data.size = 0 ∧ p.st.mp.parts.size = 0 ∧ Mp.HdrInv p.cx p.st.mp
 
 /-- The invariant of the urlencoded limit machine. -/
 def UrlInv (lim : FormLimits) (s : UrlState) : Prop :=
@@ -106,5 +129,21 @@ raised, the parser's state is within `max_fields`, `max_files` and
 def StarletteBounded : Prop :=
   (∀ lim body, Starlette.UrlInv lim ((({ lim } : Starlette.UrlencodedParser)).write body).st) ∧
   (∀ b lim body, Starlette.MpInv lim ((Starlette.MultipartFormParser.new b lim).write body).st)
+
+/-- **Incremental parsing.** Starlette's multipart parser fed any split of
+the body into chunks, with the parts assembled from its events, gives the
+whole-buffer result: the same parts, or the same error. -/
+def IncrementalAgrees : Prop :=
+  ∀ (lim : FormLimits) (contentType : ByteArray) (chunks : List ByteArray),
+    Starlette.MultipartStream.parseChunks lim contentType chunks =
+      Starlette.parseMultipartRaw lim contentType (concatChunks chunks)
+
+/-- **Memory of the incremental parser.** A new parser, and every parser a
+successful `feed` returns, keeps no part data and no completed part, and
+header buffers within `max_header_count` and `max_header_size`. -/
+def IncrementalRetains : Prop :=
+  (∀ b lim, Starlette.Retained (Starlette.MultipartStream.new b lim)) ∧
+  ∀ (p : Starlette.MultipartStream) chunk p' evs, Starlette.Retained p →
+    p.feed chunk = .ok (p', evs) → Starlette.Retained p'
 
 end LeanMultipart.Spec

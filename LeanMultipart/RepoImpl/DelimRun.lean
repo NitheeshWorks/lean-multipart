@@ -63,6 +63,7 @@ partial match, the run must not complete it. -/
 def runSpan (cx : Ctx) (s : MState) (b : ByteArray) (i stop : Nat) : Nat :=
   match s.phase with
   | .partData (.idx k) =>
+    if cx.dlen ≤ k then 0 else
     let r := findDelim b cx.delim (min stop b.size) (i + cx.dlen - 1)
     if r < i + cx.dlen then 0
     else if k != 0 && eqRun b i cx.delim k 0 then 0

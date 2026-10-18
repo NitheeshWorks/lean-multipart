@@ -3,6 +3,7 @@ import LeanMultipart.Proofs.Querystring
 import LeanMultipart.Proofs.MultipartRoundTrip
 import LeanMultipart.Proofs.Stream
 import LeanMultipart.Proofs.Form
+import LeanMultipart.Proofs.Incremental
 import LeanMultipart.Proofs.Wrappers
 import LeanMultipart.Proofs.Options
 import LeanMultipart.Specifications
@@ -62,8 +63,10 @@ theorem theVerifiedMultipart : VerifiedMultipart where
   boundaryValid := API.parseBoundary_valid
 
 /-- Forms: `FormParser` fed any chunking equals one write, the
-`Content-Disposition` a part is printed with is read back, and Starlette's
-limits hold of every accepted form. -/
+`Content-Disposition` a part is printed with is read back, Starlette's
+limits hold of every accepted form, and Starlette's incremental multipart
+parser gives the whole-buffer result for every chunking while keeping no
+part data between chunks. -/
 structure VerifiedForm where
   streaming : Spec.FormStreamingAgrees
   dispositionRoundTrip : Spec.DispositionRoundTrip
@@ -73,6 +76,8 @@ structure VerifiedForm where
     Spec.MultipartWithinLimits lim ps
   starletteStreaming : Spec.StarletteStreamingAgrees
   starletteBounded : Spec.StarletteBounded
+  incremental : Spec.IncrementalAgrees
+  incrementalRetains : Spec.IncrementalRetains
 
 theorem theVerifiedForm : VerifiedForm where
   streaming := FormParser.write_chunks
@@ -81,5 +86,7 @@ theorem theVerifiedForm : VerifiedForm where
   multipartLimits := Starlette.parseMultipartRaw_ok
   starletteStreaming := ⟨Starlette.UrlencodedParser.finalize_chunks, Starlette.MultipartFormParser.finalize_chunks⟩
   starletteBounded := ⟨Starlette.urlencoded_bounded, Starlette.multipart_bounded⟩
+  incremental := Starlette.MultipartStream.parseChunks_eq
+  incrementalRetains := ⟨Starlette.new_retained, Starlette.MultipartStream.feed_retains⟩
 
 end LeanMultipart
