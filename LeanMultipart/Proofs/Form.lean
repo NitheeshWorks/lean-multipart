@@ -127,7 +127,30 @@ theorem ofMultipart_ok (lim : FormLimits) (r : MultipartResult) (sps : List Star
     subst hs
     exact ⟨by omega, by omega, this.2.2.2.2⟩
 
+/-- An accepted urlencoded form is within the limits. -/
+theorem parseUrlencodedRaw_ok (lim : FormLimits) (body : ByteArray) (fs : List QsField)
+    (h : parseUrlencodedRaw lim body = .ok fs) :
+    fs.length ≤ lim.maxFields ∧ ∀ f ∈ fs, f.1.size + f.2.size ≤ lim.maxPartSize := by
+  unfold parseUrlencodedRaw at h
+  split at h
+  · have := checkFields_ok lim _ 0 fs (Nat.zero_le _) h
+    exact ⟨by omega, this.2⟩
+  · cases h
+
+/-- An accepted multipart form is within the limits. -/
+theorem parseMultipartRaw_ok (lim : FormLimits) (ct body : ByteArray) (ps : List StarlettePart)
+    (h : parseMultipartRaw lim ct body = .ok ps) :
+    (ps.filter (·.isFile)).length ≤ lim.maxFiles ∧ (ps.filter (! ·.isFile)).length ≤ lim.maxFields ∧
+      ∀ sp ∈ ps, sp.isFile = false → sp.data.size ≤ lim.maxPartSize := by
+  unfold parseMultipartRaw at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · exact ofMultipart_ok lim _ ps h
+
 end Starlette
+
 namespace FormParser
 
 theorem bytes_append_toList (a b : ByteArray) : (a ++ b).data.toList = a.data.toList ++ b.data.toList := by

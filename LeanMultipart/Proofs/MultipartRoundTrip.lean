@@ -1,4 +1,5 @@
 import LeanMultipart.Proofs.MultipartStream
+import LeanMultipart.Specifications.Multipart
 
 /-!
 # The multipart round trip
@@ -158,14 +159,6 @@ theorem feed_done (s : MState) (hp : s.phase = .done) (l : Bytes) :
 
 
 /-! ## Header lines -/
-
-/-- A header the printer can write and the parser reads back: a non-empty
-token name, a value with no `CR` that does not start with a space, and a
-line within `maxHeaderSize` (name, colon, space and value). -/
-def WFHeader (cfg : MultipartConfig) (h : ByteArray × ByteArray) : Prop :=
-  h.1.data.toList ≠ [] ∧ (∀ c ∈ h.1.data.toList, Byte.isTokenChar c = true) ∧
-    (∀ c ∈ h.2.data.toList, c ≠ Byte.CR) ∧ h.2.data.toList.head? ≠ some Byte.SPACE ∧
-    h.1.data.toList.length + 2 + h.2.data.toList.length ≤ cfg.maxHeaderSize
 
 theorem token_ne_CR {c : UInt8} (h : Byte.isTokenChar c = true) : c ≠ Byte.CR := by
   rintro rfl; exact absurd h (by decide)
@@ -423,13 +416,6 @@ theorem feed_afterD_last (s : MState) (hp : s.phase = .partData .afterD) :
 
 
 /-! ## Whole parts and messages -/
-
-/-- A part the printer can write and the parser reads back: at most
-`maxHeaderCount` well-formed headers, and a body that does not contain the
-delimiter. -/
-def WFPart (cx : Ctx) (p : RawPart) : Prop :=
-  p.headers.length ≤ cx.cfg.maxHeaderCount ∧ (∀ h ∈ p.headers, WFHeader cx.cfg h) ∧
-    ¬ cx.boundary.delimL <:+: p.body.data.toList
 
 /-- At the start of a part's headers, with `P` read before. -/
 def PartStart (P : List RawPart) (s : MState) : Prop :=

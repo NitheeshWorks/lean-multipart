@@ -37,12 +37,7 @@ def parseUrlencoded (lim : FormLimits) (body : ByteArray) :
     Except LimitError {fs : List QsField // Spec.UrlencodedWithinLimits lim fs} :=
   match h : LeanMultipart.Starlette.parseUrlencodedRaw lim body with
   | .error e => .error e
-  | .ok fs => .ok ⟨fs, by
-      unfold LeanMultipart.Starlette.parseUrlencodedRaw at h
-      split at h
-      · have := LeanMultipart.Starlette.checkFields_ok lim _ 0 fs (Nat.zero_le _) h
-        exact ⟨by omega, this.2⟩
-      · cases h⟩
+  | .ok fs => .ok ⟨fs, LeanMultipart.Starlette.parseUrlencodedRaw_ok lim body fs h⟩
 
 /-- Starlette's `MultiPartParser`: the parts of a `multipart/form-data`
 body given the request's `Content-Type`, with `max_files`, `max_fields` and
@@ -51,13 +46,7 @@ def parseMultipartForm (lim : FormLimits) (contentType body : ByteArray) :
     Except LimitError {ps : List StarlettePart // Spec.MultipartWithinLimits lim ps} :=
   match h : LeanMultipart.Starlette.parseMultipartRaw lim contentType body with
   | .error e => .error e
-  | .ok ps => .ok ⟨ps, by
-      unfold LeanMultipart.Starlette.parseMultipartRaw at h
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · exact LeanMultipart.Starlette.ofMultipart_ok lim _ ps h⟩
+  | .ok ps => .ok ⟨ps, LeanMultipart.Starlette.parseMultipartRaw_ok lim contentType body ps h⟩
 
 end Starlette
 end LeanMultipart.API

@@ -1,5 +1,6 @@
 import LeanMultipart.Specifications.Multipart
 import LeanMultipart.Proofs.Wrappers
+import LeanMultipart.Proofs.MultipartRoundTrip
 
 /-!
 # API: multipart/form-data
@@ -59,6 +60,59 @@ def parseMultipart (b : Boundary) (cfg : MultipartConfig) (body : ByteArray) :
       have hs : body.size = body.data.toList.length := (Array.length_toList).symm
       simp only [Mp.parse] at h1 ⊢
       rw [hs]; omega⟩
+
+end API
+end LeanMultipart
+
+namespace LeanMultipart
+
+instance (cfg : MultipartConfig) (h : ByteArray × ByteArray) : Decidable (Mp.WFHeader cfg h) := by
+  unfold Mp.WFHeader; exact inferInstance
+
+instance (cx : Mp.Ctx) (p : RawPart) : Decidable (Mp.WFPart cx p) := by
+  unfold Mp.WFPart; exact inferInstance
+
+namespace API
+
+/-- What the multipart printer promises: the parser reads back exactly
+these parts, whatever follows (the epilogue). -/
+def PrintSpec (cx : Mp.Ctx) (ps : List RawPart) (body : ByteArray) : Prop :=
+  ∀ epi : ByteArray, (Mp.parse cx (body ++ epi)).parts = ps ∧ (Mp.parse cx (body ++ epi)).ended = true ∧
+    (Mp.parse cx (body ++ epi)).error = none ∧ (Mp.parse cx (body ++ epi)).current = none
+
+instance (cx : Mp.Ctx) (ps : List RawPart) : Decidable (Mp.Fits cx ps) := by
+  unfold Mp.Fits
+  cases cx.cfg.maxSize with
+  | none => exact isTrue (fun m h => by cases h)
+  | some m =>
+    exact if h : (Mp.printL cx.boundary ps).length ≤ m then isTrue (fun m' h' => by cases h'; exact h)
+      else isFalse (fun f => h (f m rfl))
+
+/-- Print a `multipart/form-data` body. Precondition: every part is well
+formed (`Mp.WFPart`: no body contains `CR LF -- boundary`; header names
+are tokens, values contain no `CR` and do not start with a space; within
+the header limits) and the message fits `maxSize`. Postcondition: the
+round trip. -/
+def printMultipart (cx : Mp.Ctx) (ps : List RawPart) (hw : ∀ p ∈ ps, Mp.WFPart cx p) (hf : Mp.Fits cx ps) :
+    {body : ByteArray // PrintSpec cx ps body} :=
+  ⟨Mp.print cx.boundary ps, fun epi => by
+    have := Mp.multipart_parse_print_ext cx ps epi.data.toList hw hf
+    have e : (Mp.print cx.boundary ps ++ epi).data.toList = Mp.printL cx.boundary ps ++ epi.data.toList := by
+      simp [Mp.print, ByteArray.data_append]
+    simp only [Mp.parse, e]
+    exact this⟩
+
+/-- Why `printMultipart?` refused. -/
+inductive PrintError where
+  | badPart (index : Nat)
+  | tooLarge
+  deriving DecidableEq, Repr
+
+/-- `printMultipart` with its precondition checked at runtime. -/
+def printMultipart? (cx : Mp.Ctx) (ps : List RawPart) : Except PrintError {body : ByteArray // PrintSpec cx ps body} :=
+  if hw : ∀ p ∈ ps, Mp.WFPart cx p then
+    if hf : Mp.Fits cx ps then .ok (printMultipart cx ps hw hf) else .error .tooLarge
+  else .error (.badPart ((ps.findIdx? (fun p => !decide (Mp.WFPart cx p))).getD 0))
 
 end API
 end LeanMultipart
