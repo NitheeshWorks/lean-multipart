@@ -4,16 +4,17 @@ import LeanMultipart.RepoImpl.Unquote
 # The fast field decoder is the specification
 
 `unquotePlusLatin1` (the machine pushing characters onto a `String`) and
-`unquotePlusLatin1Fast` (the same machine writing UTF-8 bytes, copying runs
-of plain ASCII at once) are equal, so `@[csimp]` lets compiled code run the
+`unquotePlusLatin1Fast` (the same machine writing UTF-8 bytes, taking each
+run without `%` at once) are equal, so `@[csimp]` lets compiled code run the
 fast one wherever the specification is called.
 
 The argument has two steps. The machine is generic in its `Sink`, and
 `String.toByteArray` turns pushing a character onto a string into pushing
 its UTF-8 bytes (`toByteArray_push`), so running on bytes is running on the
-string and encoding (`foldl_toBytes`). And a run of plain ASCII, folded byte
-by byte, appends those bytes (`foldl_plain`), which is what the copy does
-(`plainBulk_eq`), so `bytesFoldRun_eq` applies.
+string and encoding (`foldl_toBytes`). And a run without `%`, folded byte by
+byte, appends the bytes' `encByte`s (`foldl_lit`), which is what the copy and
+its fix-up write (`fillA_spec`, `fillB_spec`, `litBulk_eq`), so
+`bytesFoldRun_eq` applies.
 -/
 
 namespace LeanMultipart
@@ -117,7 +118,7 @@ theorem foldl_toBytes : ∀ (l : Bytes) (s : St String), toBytes (l.foldl step s
   | nil => intro s; rfl
   | cons c l ih => intro s; rw [List.foldl_cons, List.foldl_cons, ih, step_toBytes]
 
-/-! ## Runs of plain ASCII -/
+/-! ## Plain ASCII -/
 
 theorem step_plain (s : St ByteArray) (c : UInt8) (hp : s.pct = .none) (hu : s.u8 = .idle)
     (hc : special c = false) : step s c = { s with out := s.out.push c } := by
@@ -146,44 +147,324 @@ theorem foldl_plain : ∀ (l : Bytes) (s : St ByteArray), s.pct = .none → s.u8
     congr 1
     apply ByteArray.ext_toList; simp [ByteArray.data_append]
 
-theorem plainSpan_le (s : St ByteArray) (b : ByteArray) (i stop : Nat) : plainSpan s b i stop ≤ stop - i := by
-  unfold plainSpan; split
-  · rcases scanUntil_le b special stop _ i rfl with h | h <;> omega
+/-! ## Runs without `%` -/
+
+theorem char_val (c : UInt8) : (Char.ofNat c.toNat).val.toNat = c.toNat := by
+  have hc : c.toNat < 256 := c.toNat_lt
+  have hv : c.toNat.isValidChar := Or.inl (by omega)
+  simp [Char.ofNat, hv, Char.ofNatAux]
+
+theorem utf8_high (c : UInt8) (h : ¬ c < 0x80) :
+    String.utf8EncodeChar (Char.ofNat c.toNat) = if c < 0xC0 then [0xC2, c] else [0xC3, c - 0x40] := by
+  have hc : c.toNat < 256 := c.toNat_lt
+  have h8 : 128 ≤ c.toNat := by simp [UInt8.lt_iff_toNat_lt] at h; omega
+  unfold String.utf8EncodeChar
+  simp only [char_val]
+  rw [ite_eq_right (by omega), ite_eq_left (by omega)]
+  split
+  · rename_i hl
+    have hl' : c.toNat < 192 := by simpa [UInt8.lt_iff_toNat_lt] using hl
+    congr 1
+    · apply UInt8.toNat.inj; simp; omega
+    · congr 1; apply UInt8.toNat.inj; simp; omega
+  · rename_i hl
+    have hl' : 192 ≤ c.toNat := by simp [UInt8.lt_iff_toNat_lt] at hl; omega
+    congr 1
+    · apply UInt8.toNat.inj; simp; omega
+    · congr 1; apply UInt8.toNat.inj
+      have : (c - 0x40).toNat = c.toNat - 64 := UInt8.toNat_sub_of_le _ _ (by simp [UInt8.le_iff_toNat_le]; omega)
+      simp [this]; omega
+
+theorem step_lit (s : St ByteArray) (c : UInt8) (hp : s.pct = .none) (hu : s.u8 = .idle)
+    (hc : c ≠ Byte.PERCENT) : step s c = { s with out := s.out ++ ⟨(encByte c).toArray⟩ } := by
+  obtain ⟨out, p, u⟩ := s
+  simp only at hp hu; subst hp; subst hu
+  have hpct : (c == Byte.PERCENT) = false := by simpa using hc
+  simp only [step, plain, hpct, litByte, lit, emit, Sink.push, pushUtf8, Bool.false_eq_true, ↓reduceIte, encByte]
+  congr 1
+  by_cases hlt : c < 0x80
+  · simp only [hlt, ↓reduceIte]
+    by_cases hplus : c = Byte.PLUS
+    · subst hplus; apply ByteArray.ext; simp [Byte.PLUS]
+    · have hv := char_val c
+      have h127 : c.toNat ≤ 127 := by have := UInt8.lt_iff_toNat_lt.mp hlt; simp at this; omega
+      simp only [beq_iff_eq, hplus, ↓reduceIte, hv, h127]
+      apply ByteArray.ext; simp [UInt8.ofNat_toNat]
+  · have hv := char_val c
+    have h127 : ¬ c.toNat ≤ 127 := by simp [UInt8.lt_iff_toNat_lt] at hlt; omega
+    have hplus : (c == Byte.PLUS) = false := by
+      simp only [beq_eq_false_iff_ne]; intro h; subst h; exact hlt (by decide)
+    simp only [hlt, hplus, ↓reduceIte, hv, h127, Bool.false_eq_true, utf8_high c hlt]
+    split <;> rfl
+
+theorem foldl_lit : ∀ (l : Bytes) (s : St ByteArray), s.pct = .none → s.u8 = .idle →
+    (∀ x ∈ l, x ≠ Byte.PERCENT) → l.foldl step s = { s with out := s.out ++ ⟨(encList l).toArray⟩ } := by
+  intro l
+  induction l with
+  | nil => intro s _ _ _; simp [encList]
+  | cons c l ih =>
+    intro s hp hu hl
+    rw [List.foldl_cons, step_lit s c hp hu (hl c (by simp)),
+      ih { s with out := s.out ++ ⟨(encByte c).toArray⟩ } hp hu (fun x hx => hl x (by simp [hx]))]
+    congr 1
+    apply ByteArray.ext_toList; simp [ByteArray.data_append, encList]
+
+theorem take_put {α : Type} (L : List α) (j : Nat) (x : α) (hj : j ≤ L.length) :
+    (L.take j ++ x :: L.drop (j + 1)).take (j + 1) = L.take j ++ [x] := by
+  rw [List.take_append, List.take_of_length_le (by simp; omega), List.length_take, Nat.min_eq_left hj,
+    Nat.add_sub_cancel_left]
+  rfl
+
+theorem drop_put {α : Type} (L : List α) (j : Nat) (x : α) (hj : j ≤ L.length) (e : Nat) :
+    (L.take j ++ x :: L.drop (j + 1)).drop (j + 1 + e) = L.drop (j + 1 + e) := by
+  rw [List.drop_append, List.drop_eq_nil_of_le (by simp; omega), List.length_take, Nat.min_eq_left hj,
+    List.nil_append, show j + 1 + e - j = e + 1 by omega, List.drop_succ_cons, List.drop_drop]
+
+theorem uset_toList (out : ByteArray) (j : USize) (x : UInt8) (h : j.toNat < out.size) :
+    (out.uset j x h).data.toList = out.data.toList.take j.toNat ++ x :: out.data.toList.drop (j.toNat + 1) := by
+  have h' : j.toNat < out.data.toList.length := by simpa using h
+  show (out.data.uset j x h).toList = _
+  rw [Array.uset_eq_set, Array.toList_set, List.set_eq_take_append_cons_drop, ite_eq_left h']
+
+theorem set_toList (out : ByteArray) (j : Nat) (x : UInt8) (h : j < out.size) :
+    (out.set j x h).data.toList = out.data.toList.take j ++ x :: out.data.toList.drop (j + 1) := by
+  have h' : j < out.data.toList.length := by simpa using h
+  show (out.data.set j x h).toList = _
+  rw [Array.toList_set, List.set_eq_take_append_cons_drop, ite_eq_left h']
+
+theorem fillB_spec (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) :
+    ∀ (n : Nat) (i j : USize) (out : ByteArray) (hw : out.size < USize.size)
+      (hj : j.toNat + (encList (lits b i.toNat stop.toNat)).length ≤ out.size), stop.toNat - i.toNat = n →
+      (fillB b stop hs i j out hw hj).data.toList =
+        out.data.toList.take j.toNat ++ encList (lits b i.toNat stop.toNat) ++
+          out.data.toList.drop (j.toNat + (encList (lits b i.toNat stop.toNat)).length) := by
+  intro n
+  induction n with
+  | zero =>
+    intro i j out hw hj hn
+    rw [fillB.eq_1]
+    have h1 : ¬ i < stop := by rw [USize.lt_iff_toNat_lt]; omega
+    simp only [h1, ↓reduceDIte, lits_nil b _ _ (show ¬ i.toNat < stop.toNat by omega), encList,
+      List.flatMap_nil, List.append_nil, List.length_nil, Nat.add_zero, List.take_append_drop]
+  | succ n ih =>
+    intro i j out hw hj hn
+    have hi : i.toNat < stop.toNat := by omega
+    have h1 : i < stop := by rw [USize.lt_iff_toNat_lt]; exact hi
+    have hi1 := usize_succ_lt i stop.toNat hi stop.toNat_lt_two_pow_numBits
+    have hl := lits_cons b i.toNat stop.toNat hi hs
+    rw [fillB.eq_1]
+    simp only [h1, ↓reduceDIte]
+    have hget : b.uget i (by omega) = b[i.toNat] := rfl
+    have hL : j.toNat ≤ out.data.toList.length := by
+      have : 0 < (encList (lits b i.toNat stop.toNat)).length := by
+        rw [hl, encList_cons, encByte_length]; split <;> omega
+      simp; omega
+    split
+    · rename_i hlt
+      rw [ih (i + 1) (j + 1) _ _ _ (by omega)]
+      simp only [uset_toList]
+      generalize hcx : b.uget i _ = c at *
+      subst hget
+      have hjo : j.toNat < out.size := by
+        rw [hl, encList_cons, encByte_length, ite_eq_left hlt] at hj; omega
+      have hj1 := usize_succ_lt j out.size hjo hw
+      rw [hj1, hi1, take_put _ _ _ hL, drop_put _ _ _ hL, hl, encList_cons]
+      simp only [encList, List.flatMap_cons, encByte, hlt, ↓reduceIte, List.append_assoc,
+        List.cons_append, List.length_cons, List.length_nil]
+      rw [show j.toNat + (0 + 1 + (List.flatMap encByte (lits b (i.toNat + 1) stop.toNat)).length) =
+        j.toNat + 1 + (List.flatMap encByte (lits b (i.toNat + 1) stop.toNat)).length by omega]
+    · rename_i hlt
+      rw [hget] at hlt
+      have hjo : j.toNat + 1 < out.size := by
+        rw [hl, encList_cons, encByte_length, ite_eq_right hlt] at hj; omega
+      have hj1 := usize_succ_lt j out.size (by omega) hw
+      have hj2 : (j + 2).toNat = j.toNat + 2 := usize_add_toNat j 2 (by omega)
+      have key : ∀ (y1 y2 : UInt8) (p1 : j.toNat < out.size) (p2 : (j + 1).toNat < (out.uset j y1 p1).size)
+          (q1 : ((out.uset j y1 p1).uset (j + 1) y2 p2).size < USize.size)
+          (q2 : (j + 2).toNat + (encList (lits b (i + 1).toNat stop.toNat)).length ≤
+            ((out.uset j y1 p1).uset (j + 1) y2 p2).size), encByte b[i.toNat] = [y1, y2] →
+          (fillB b stop hs (i + 1) (j + 2) ((out.uset j y1 p1).uset (j + 1) y2 p2) q1 q2).data.toList =
+            out.data.toList.take j.toNat ++ encList (lits b i.toNat stop.toNat) ++
+              out.data.toList.drop (j.toNat + (encList (lits b i.toNat stop.toNat)).length) := by
+        intro y1 y2 p1 p2 q1 q2 hy
+        rw [ih (i + 1) (j + 2) _ q1 q2 (by omega)]
+        have hL1 : (j + 1).toNat ≤ (out.uset j y1 p1).data.toList.length := by
+          rw [hj1]; simp [size_uset']; omega
+        rw [uset_toList, hj2, ← show (j + 1).toNat + 1 = j.toNat + 2 by omega, take_put _ _ _ hL1,
+          drop_put _ _ _ hL1, hj1, uset_toList, take_put _ _ _ hL,
+          show j.toNat + 1 + 1 + (encList (lits b (i + 1).toNat stop.toNat)).length =
+            j.toNat + 1 + (1 + (encList (lits b (i + 1).toNat stop.toNat)).length) by omega,
+          drop_put _ _ _ hL, hi1, hl, encList_cons, hy]
+        simp only [encList, List.flatMap_cons, List.append_assoc, List.cons_append, List.nil_append,
+          List.length_cons, List.length_nil]
+        rw [show j.toNat + 1 + (1 + (List.flatMap encByte (lits b (i.toNat + 1) stop.toNat)).length) =
+          j.toNat + (0 + 1 + 1 + (List.flatMap encByte (lits b (i.toNat + 1) stop.toNat)).length) by omega, hy]
+        rfl
+      split
+      · rename_i h2
+        rw [hget] at h2
+        exact key _ _ _ _ _ _ (by simp [encByte, hlt, h2, hget])
+      · rename_i h2
+        rw [hget] at h2
+        exact key _ _ _ _ _ _ (by simp [encByte, hlt, h2, hget])
+
+theorem lits_split (b : ByteArray) (i k stop : Nat) (h1 : i ≤ k) (h2 : k ≤ stop) :
+    lits b i stop = lits b i k ++ lits b k stop := by
+  unfold lits
+  rw [show stop - i = (k - i) + (stop - k) by omega, List.take_add, List.drop_drop,
+    show i + (k - i) = k by omega]
+
+theorem encList_id (l : Bytes) (h : ∀ x ∈ l, litStop x = false) : encList l = l := by
+  induction l with
+  | nil => rfl
+  | cons c l ih =>
+    simp only [encList, List.flatMap_cons] at ih ⊢
+    rw [encByte_plain c (h c (by simp)), ih (fun x hx => h x (by simp [hx]))]; rfl
+
+theorem encList_append (l1 l2 : Bytes) : encList (l1 ++ l2) = encList l1 ++ encList l2 := by
+  simp [encList]
+
+theorem lits_length (b : ByteArray) (i stop : Nat) (h : stop ≤ b.size) : (lits b i stop).length = stop - i := by
+  simp [lits]; omega
+
+theorem fillA_spec (b : ByteArray) (stop : USize) (hs : stop.toNat ≤ b.size) :
+    ∀ (n : Nat) (i j : USize) (out : ByteArray) (hw : out.size + (stop.toNat - i.toNat) < USize.size)
+      (hj : j.toNat + (stop.toNat - i.toNat) ≤ out.size) (A : Bytes), stop.toNat - i.toNat = n →
+      A.length = j.toNat → out.data.toList = A ++ lits b i.toNat stop.toNat →
+      (fillA b stop hs i j out hw hj).data.toList = A ++ encList (lits b i.toNat stop.toNat) := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+    intro i j out hw hj A hn hA hout
+    have hkN := scanUntilU8_eq b litStop stop hs _ i rfl
+    have hki := scanUntil_ge b litStop stop.toNat _ i.toNat rfl
+    have hkle := scanUntil_le b litStop stop.toNat _ i.toNat rfl
+    have hne := scanUntil_ne b litStop stop.toNat _ i.toNat rfl
+    rw [fillA.eq_1]
+    dsimp only
+    obtain ⟨k, hk⟩ : ∃ k, scanUntilU8 b litStop stop hs i = k := ⟨_, rfl⟩
+    simp only [hk] at hkN ⊢
+    rw [← hkN] at hki hkle hne
+    have hid : ∀ k', k' ≤ k.toNat → encList (lits b i.toNat k') = lits b i.toNat k' := fun k' hk' =>
+      encList_id _ (by
+        intro x hx; apply hne x; unfold lits at hx
+        have e : List.take (k' - i.toNat) (List.drop i.toNat b.data.toList) =
+            List.take (k' - i.toNat) (List.take (k.toNat - i.toNat) (List.drop i.toNat b.data.toList)) := by
+          rw [List.take_take, Nat.min_eq_left (by omega)]
+        rw [e] at hx; exact List.mem_of_mem_take hx)
+    split
+    · rename_i h
+      have hkS : k.toNat < stop.toNat := USize.lt_iff_toNat_lt.mp h
+      have hk2 : k.toNat ≤ stop.toNat := by omega
+      have hsplit := lits_split b i.toNat k.toNat stop.toNat hki hk2
+      have hlen_ik : (lits b i.toNat k.toNat).length = k.toNat - i.toNat := lits_length b _ _ (by omega)
+      have hik : (k - i).toNat = k.toNat - i.toNat := USize.toNat_sub_of_le _ _ (USize.le_iff_toNat_le.mpr hki)
+      have hj' : (j + (k - i)).toNat = j.toNat + (k.toNat - i.toNat) := by
+        have hs2 : USize.size = 2 ^ System.Platform.numBits := rfl
+        rw [USize.toNat_add, hik]; exact Nat.mod_eq_of_lt (by omega)
+      have hAl : (A ++ lits b i.toNat k.toNat).length = (j + (k - i)).toNat := by simp [hA, hlen_ik, hj']
+      have hout2 : out.data.toList = (A ++ lits b i.toNat k.toNat) ++ lits b k.toNat stop.toNat := by
+        rw [hout, hsplit]; simp
+      have hl := lits_cons b k.toNat stop.toNat hkS hs
+      have hget : b.uget k (by omega) = b[k.toNat] := rfl
+      have hk1 : (k + 1).toNat = k.toNat + 1 := usize_succ_lt k stop.toNat hkS stop.toNat_lt_two_pow_numBits
+      split
+      · rename_i hplus
+        rw [hget] at hplus
+        have hc : b[k.toNat] = Byte.PLUS := by simpa using hplus
+        have he : encByte b[k.toNat] = [0x20] := by simp [encByte, hc, Byte.PLUS]
+        have hjo : (j + (k - i)).toNat < out.size := by omega
+        have hj1 : (j + (k - i) + 1).toNat = (j + (k - i)).toNat + 1 := usize_succ_lt _ out.size hjo (by omega)
+        have hout' : (out.uset (j + (k - i)) 0x20 hjo).data.toList =
+            (A ++ lits b i.toNat k.toNat ++ [0x20]) ++ lits b (k + 1).toNat stop.toNat := by
+          rw [uset_toList, hout2, hl, hk1, ← hAl]
+          generalize A ++ lits b i.toNat k.toNat = P
+          rw [List.take_left, List.drop_append, List.drop_eq_nil_of_le (by omega),
+            List.nil_append, show P.length + 1 - P.length = 1 by omega]
+          simp
+        have a1 : (A ++ lits b i.toNat k.toNat ++ [0x20]).length = (j + (k - i) + 1).toNat := by
+          rw [hj1, ← hAl]; simp; omega
+        rw [ih (stop.toNat - (k + 1).toNat) (by omega) (k + 1) _ _ _ _ (A ++ lits b i.toNat k.toNat ++ [0x20])
+          rfl a1 hout']
+        rw [hsplit, encList_append, hid k.toNat (Nat.le_refl _), hl, hk1]
+        simp only [encList, List.flatMap_cons, he]
+        simp
+      · rename_i hplus
+        have hx := countHigh_spec b stop hs (stop.toNat - k.toNat) k 0 rfl (by simp; omega)
+        have hlk : (lits b k.toNat stop.toNat).length = stop.toNat - k.toNat := lits_length b _ _ hs
+        simp only [USize.toNat_zero, Nat.zero_add, hlk] at hx
+        rw [fillB_spec b stop hs (stop.toNat - k.toNat) k (j + (k - i)) _ _ _ rfl]
+        rw [copySlice_end, ByteArray.data_append, Array.toList_append, extract_toList, hout2]
+        have hdrop : ((A ++ lits b i.toNat k.toNat) ++ lits b k.toNat stop.toNat ++
+              (b.data.toList.drop k.toNat).take (countHigh b stop hs k 0).toNat).length ≤
+            (j + (k - i)).toNat + (encList (lits b k.toNat stop.toNat)).length := by
+          have : ((b.data.toList.drop k.toNat).take (countHigh b stop hs k 0).toNat).length ≤
+            (countHigh b stop hs k 0).toNat := List.length_take_le _ _
+          simp only [List.length_append, hAl, hlk] at this ⊢; omega
+        rw [List.drop_eq_nil_of_le hdrop, List.append_nil, List.append_assoc (A ++ lits b i.toNat k.toNat), ← hAl,
+          List.take_left, hsplit, encList_append, hid k.toNat (Nat.le_refl _)]
+        simp
+    · rename_i h
+      have hkS : ¬ k.toNat < stop.toNat := fun h' => h (USize.lt_iff_toNat_lt.mpr h')
+      have hall : lits b i.toNat stop.toNat = lits b i.toNat k.toNat := by
+        unfold lits; congr 1; rcases hkle with h' | h'
+        · omega
+        · omega
+      rw [hout, hall, hid k.toNat (Nat.le_refl _)]
+
+theorem litSpan_le (s : St ByteArray) (b : ByteArray) (i stop : Nat) : litSpan s b i stop ≤ stop - i := by
+  unfold litSpan; split
+  · rcases scanFor_le b Byte.PERCENT stop _ i rfl with h | h <;> omega
   · exact Nat.zero_le _
 
-theorem plainBulk_eq (s : St ByteArray) (b : ByteArray) (i stop : Nat) :
-    plainBulk s b i (plainSpan s b i stop) = ((b.data.toList.drop i).take (plainSpan s b i stop)).foldl step s := by
-  unfold plainBulk
+theorem litBulk_eq (s : St ByteArray) (b : ByteArray) (i stop : Nat) :
+    litBulk s b i (litSpan s b i stop) = ((b.data.toList.drop i).take (litSpan s b i stop)).foldl step s := by
+  unfold litBulk
   split
   · rename_i h; rw [h]; rfl
-  · rename_i h
-    unfold plainSpan at h ⊢
-    split at h
-    · rename_i hp hu
-      have hne := scanUntil_ne b special stop _ i rfl
-      rcases scanUntil_le b special stop _ i rfl with hr | hr
-      · omega
-      · have hge := scanUntil_ge b special stop _ i rfl
-        rw [foldl_plain _ s hp hu hne, copySlice_end]
-        congr 1
-        apply ByteArray.ext_toList
-        simp only [ByteArray.data_append, Array.toList_append, extract_toList]
-    · exact absurd rfl h
+  · rename_i h0
+    split
+    · rename_i hg
+      have hm : ∃ hp : s.pct = .none, s.u8 = .idle ∧ litSpan s b i stop = scanFor b Byte.PERCENT stop i - i := by
+        unfold litSpan at h0 ⊢
+        split at h0
+        · rename_i hp hu; exact ⟨hp, hu, rfl⟩
+        · exact absurd rfl h0
+      obtain ⟨hp, hu, hspan⟩ := hm
+      have hne : ∀ x ∈ (b.data.toList.drop i).take (litSpan s b i stop), x ≠ Byte.PERCENT := by
+        rw [hspan]; exact scanFor_ne b Byte.PERCENT stop _ i rfl
+      rw [foldl_lit _ s hp hu hne]
+      dsimp only
+      congr 1
+      apply ByteArray.ext_toList
+      generalize litSpan s b i stop = n at *
+      have hlits : lits b i (i + n) = (b.data.toList.drop i).take n := by simp [lits]
+      obtain ⟨hib, hb, hw⟩ := hg
+      have e1 : (i + n).toUSize.toNat = i + n := toNat_toUSize (by omega)
+      have e2 : i.toUSize.toNat = i := toNat_toUSize (by omega)
+      have e3 : s.out.size.toUSize.toNat = s.out.size := toNat_toUSize (by omega)
+      have hout1 : (b.copySlice i s.out s.out.size n false).data.toList =
+          s.out.data.toList ++ lits b i.toUSize.toNat (i + n).toUSize.toNat := by
+        rw [copySlice_end, ByteArray.data_append, Array.toList_append, extract_toList, e1, e2, hlits]
+      rw [fillA_spec b (i + n).toUSize _ n i.toUSize s.out.size.toUSize _ _ _ s.out.data.toList
+        (by rw [e1, e2]; omega) (by rw [e3]; simp) hout1, e1, e2, hlits]
+      simp [ByteArray.data_append]
+    · rfl
 
 end Unquote
 
 open Unquote in
-/-- The decoder as compiled: UTF-8 bytes, with plain ASCII runs copied at once. -/
+/-- The decoder as compiled: UTF-8 bytes, with each run without `%` taken at once. -/
 def unquotePlusLatin1Bytes (raw : ByteArray) : ByteArray :=
-  finish (bytesFoldRun step plainSpan plainBulk (fun _ => false) raw raw.size 0
+  finish (bytesFoldRun step litSpan litBulk (fun _ => false) raw raw.size 0
     ({ out := ByteArray.emptyWithCapacity raw.size } : St ByteArray))
 
 open Unquote in
 theorem unquotePlusLatin1Bytes_eq (raw : ByteArray) :
     unquotePlusLatin1Bytes raw = (unquotePlusLatin1 raw).toByteArray := by
   unfold unquotePlusLatin1Bytes unquotePlusLatin1
-  rw [bytesFoldRun_eq step plainSpan plainBulk (fun _ => false) (fun _ _ h => by cases h) plainSpan_le
-    plainBulk_eq raw raw.size _ 0 _ rfl, bytesFold_full, finish_toBytes, foldl_toBytes]
+  rw [bytesFoldRun_eq step litSpan litBulk (fun _ => false) (fun _ _ h => by cases h) litSpan_le
+    litBulk_eq raw raw.size _ 0 _ rfl, bytesFold_full, finish_toBytes, foldl_toBytes]
   rfl
 
 open Unquote in

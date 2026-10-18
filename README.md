@@ -183,9 +183,17 @@ a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 | a 1 / 2 / 4 MiB field name, parsed and decoded | plain | 2.5 / 3.8 / 7.3 ms (python-multipart + `unquote_plus`: 1.5 / 2.3 / 7.0) | 13 / 18 / 24 MB |
 | a 1 MiB + 1 field name at the default limits | `fieldTooLarge` | 0.3 ms (Starlette: 1.3 ms) | 11 MB |
 | `a=` + 10 MiB value, parsed and decoded (`parseUrlencodedForm`) | plain / escaped / mixed | 24 / 486 / 414 ms (python-multipart + `unquote_plus`: 22 / 1130 / 575) | 44 MB |
+| `a=` + 10 MiB of `hello+world` / of raw UTF-8 `café` | decoded | 18 / 34 ms (python-multipart + `unquote_plus`: 14 / 6) | 54 / 71 MB |
+| a 10 MiB field name of `hello+café` | decoded | 34 ms (python-multipart + `unquote_plus`: 12) | 69 MB |
 | 50 MB file part, whole body | parsed | 150 ms | 115 MB |
 | 50 MB random binary file part, whole body | parsed | 260 ms | 220 MB |
 | 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 150 ms | 68 MB |
+
+Raw bytes `≥ 0x80` cost more here than in Python: CPython's Latin-1 string is
+a copy of the bytes, while a Lean `String` is UTF-8, so each such byte is
+written as two bytes, and the runtime copies and measures the result to make
+the `String`; those rows run at 3-6× Python, where `+` and `%XY` run within
+2×.
 
 Parsers read the packed bytes directly and keep their buffers in
 `ByteArray`; the limit parsers stop reading at the first error. Inside part

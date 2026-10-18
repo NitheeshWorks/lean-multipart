@@ -2,7 +2,9 @@
 python-multipart's QuerystringParser on `a=<value>`, collecting the raw field
 as Starlette's FormParser does, then Starlette's
 `unquote_plus(raw.decode("latin-1"))`. Values: plain (`x`), escaped (`%41`),
-mixed (`ab+c%20` repeated), of 1, 10 and 50 MiB.
+mixed (`ab+c%20` repeated), of 1, 10 and 50 MiB. Then fields without `%`, the
+common form a browser sends: values of `hello+world` (a space as `+`) and of
+raw UTF-8 `café`, and names of `hello+café`, each of 1 and 10 MiB.
 
   stack-tools/capped upstream-spec/.venv/bin/python -I tests/upstream/urlencoded_speed.py
 """
@@ -64,3 +66,15 @@ for kind in ["plain", "escaped", "mixed"]:
         out = [(unquote_plus(k.decode("latin-1")), unquote_plus(v.decode("latin-1"))) for k, v in fields]
         t1 = time.perf_counter()
         print(f"qs-{kind}-{mib} ms={(t1 - t0) * 1000:.1f} out={len(out[0][1])}")
+
+units = {"plus": b"hello+world", "latin": "café".encode()}
+for kind in ["plus", "latin"]:
+    for mib in [1, 10]:
+        b = b"a=" + (units[kind] * (mib * MIB // len(units[kind]) + 1))[:mib * MIB]
+        t0 = time.perf_counter(); out = parse(b); t1 = time.perf_counter()
+        print(f"qs-{kind}-{mib} ms={(t1 - t0) * 1000:.1f} out={len(out[0][1])}")
+unit = "hello+café".encode()
+for mib in [1, 10]:
+    b = (unit * (mib * MIB // len(unit) + 1))[:mib * MIB] + b"=1"
+    t0 = time.perf_counter(); out = parse(b); t1 = time.perf_counter()
+    print(f"name-plus-{mib} ms={(t1 - t0) * 1000:.1f} out={len(out[0][0])}")

@@ -336,6 +336,10 @@ def decodeCases : List Case :=
      name := "starlette urlencoded: a 1 MiB name is accepted and decoded",
      run := pure (match API.Starlette.parseUrlencodedForm {} (bs (nTimes "a+b%41" (1024 * 1024 / 6) ++ "=1")) with
        | .ok items => items.val == [(nTimes "a bA" (1024 * 1024 / 6), "1")] | _ => false) },
+   { upstream := "starlette formparsers.py FormParser.parse (unquote_plus(field.decode(\"latin-1\")))"
+     name := "starlette urlencoded: '+' and raw bytes >= 0x80 in a 1 MiB name and value",
+     run := pure (match API.Starlette.parseUrlencodedForm {} (bs (nTimes "hello+caf\u00e9" 50000 ++ "=" ++ nTimes "a+b\u00ff%41" 50000)) with
+       | .ok items => items.val == [(nTimes "hello caf\u00c3\u00a9" 50000, nTimes "a b\u00c3\u00bfA" 50000)] | _ => false) },
    { upstream := "starlette formparsers.py FormParser.parse (unquote_plus(field.decode(\"latin-1\"))), tests/upstream/unquote_golden.py"
      name := "unquotePlusLatin1 = CPython unquote_plus on 812 golden inputs",
      run := do

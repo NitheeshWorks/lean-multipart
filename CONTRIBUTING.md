@@ -81,9 +81,15 @@ Starlette decodes each urlencoded name and value with
 characters onto a `String`: `+` is a space, each run of `%XY` bytes is UTF-8
 with CPython's replacement rules, any other byte is its Latin-1 character.
 The machine is generic in its output (`Sink`); run into a `ByteArray` of
-UTF-8 with runs of plain ASCII copied at once (`plainSpan`, `plainBulk`), it
-is `unquotePlusLatin1Fast`, and `Proofs/Unquote.lean` proves the two equal
-and marks it `@[csimp]`, so compiled code runs the fast form while every
+UTF-8 with each run without `%` taken at once (`litSpan`, `litBulk`), it is
+`unquotePlusLatin1Fast`. A run is copied to the output, which is right until
+its first `+` or byte `≥ 0x80`; `fillA` overwrites each `+` with a space in
+place, and from the first byte `≥ 0x80` on, `countHigh` sizes the output
+exactly and `fillB` writes each byte's UTF-8 at its place. Their writes carry
+their bounds as proofs (`uset`, `set`), so none is checked at run time, and
+`fillA_spec`, `fillB_spec` and `litBulk_eq` say they write `encList` of the
+run, which `foldl_lit` says the machine does byte by byte. `Proofs/Unquote.lean`
+proves the fast form equal to the specification and marks it `@[csimp]`, so compiled code runs the fast form while every
 statement is about the specification. Scans use the same mechanism:
 `scanUntil` and `scanFor` count with `Nat` in the proofs and run on `USize`
 indices, eight bytes per step with the flags or-ed together while none

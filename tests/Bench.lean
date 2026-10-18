@@ -59,15 +59,24 @@ def peakKB : IO Nat := do
       return (String.ofList (line.toList.filter Char.isDigit)).toNat!
   return 0
 
-/-- `a=` and a value of `mib` MiB: plain (`x`), escaped (`%41`), or mixed
-(`ab+c%20` repeated), as `tests/upstream/urlencoded_speed.py` builds them. -/
+/-- `a=` and a value of `mib` MiB: plain (`x`), escaped (`%41`), mixed
+(`ab+c%20`), spaces as `+` (`hello+world`), or raw UTF-8 (`café`, read as
+Latin-1), repeated, as `tests/upstream/urlencoded_speed.py` builds them. -/
 def qsValue (kind : String) (mib : Nat) : ByteArray :=
-  let unit := match kind with | "escaped" => u "%41" | "mixed" => u "ab+c%20" | _ => u "x"
+  let unit := match kind with
+    | "escaped" => u "%41" | "mixed" => u "ab+c%20" | "plus" => u "hello+world" | "latin" => u "café"
+    | _ => u "x"
   let n := mib * mb
   (build [.bytes (u "a="), .rep unit (n / unit.size + 1)]).extract 0 (n + 2)
 
 def qsCases : List (String × String × Nat) :=
-  ["plain", "escaped", "mixed"].flatMap fun k => [1, 10, 50].map fun m => (s!"qs-{k}-{m}", k, m)
+  (["plain", "escaped", "mixed"].flatMap fun k => [1, 10, 50].map fun m => (s!"qs-{k}-{m}", k, m)) ++
+  (["plus", "latin"].flatMap fun k => [1, 10].map fun m => (s!"qs-{k}-{m}", k, m))
+
+/-- A field name of `mib` MiB of `hello+café` repeated, then `=1`. -/
+def plusName (mib : Nat) : ByteArray :=
+  let unit := u "hello+café"
+  (build [.rep unit (mib * mb / unit.size + 1)]).extract 0 (mib * mb) ++ u "=1"
 
 def body : String → ByteArray
   | "url50" => build [.bytes (u "a="), .fill 120 (50 * mb)]
@@ -89,6 +98,8 @@ def body : String → ByteArray
   | "name-2" => build [.fill 120 (2 * mb), .bytes (u "=1")]
   | "name-4" => build [.fill 120 (4 * mb), .bytes (u "=1")]
   | "name-over" => build [.fill 120 (mb + 1), .bytes (u "=1")]
+  | "name-plus-1" => plusName 1
+  | "name-plus-10" => plusName 10
   | c => match qsCases.find? (·.1 == c) with
     | some (_, k, m) => qsValue k m
     | none => ByteArray.empty
@@ -116,11 +127,11 @@ def run (c : String) (b : ByteArray) : String :=
   | "percent50" => s!"{(percentDecode (percentEncode b)).size == b.size}"
   | "options" => s!"{(parseOptionsHeader b).2.entries.length} params"
   | "qs-plain-1" | "qs-plain-10" | "qs-plain-50" | "qs-escaped-1" | "qs-escaped-10" | "qs-escaped-50"
-  | "qs-mixed-1" | "qs-mixed-10" | "qs-mixed-50" =>
+  | "qs-mixed-1" | "qs-mixed-10" | "qs-mixed-50" | "qs-plus-1" | "qs-plus-10" | "qs-latin-1" | "qs-latin-10" =>
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.2.length)).foldl (· + ·) 0} chars"
-  | "name-1" | "name-2" | "name-4" =>
+  | "name-1" | "name-2" | "name-4" | "name-plus-1" | "name-plus-10" =>
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.1.length)).foldl (· + ·) 0} name chars"
@@ -156,6 +167,17 @@ def bounds : String → Nat × Nat
   -- limits: 2× python-multipart + unquote_plus (1.5, 2.3, 7.0 ms) and 2× Starlette
   -- 1.8.0's refusal (1.3 ms), from tests/upstream/urlencoded_speed.py
   | "name-1" => (3000, 3) | "name-2" => (4600, 3) | "name-4" => (14000, 3) | "name-over" => (2600, 3)
+  -- fields without `%`, as browsers send them: values of `hello+world` and raw UTF-8
+  -- `café`, names of `hello+café`, 1 and 10 MiB. python-multipart + unquote_plus:
+  -- plus 6.3 / 14.3 ms, latin 0.6 / 6.0, names 1.2 / 12.4. `+` is held to 2×.
+  -- Raw bytes ≥ 0x80 are not: Python's Latin-1 str is a copy of the bytes, while
+  -- each such byte here becomes two UTF-8 bytes, written one at a time, and the
+  -- runtime then copies and measures the result to make the `String` (about
+  -- 0.6 ns a byte), so these rows are held to 2× this port's own time
+  -- (3 / 34 ms latin, 3.2 / 34 ms names), 3-6× Python.
+  | "qs-plus-1" => (12600, 3) | "qs-plus-10" => (28600, 3)
+  | "qs-latin-1" => (6000, 3) | "qs-latin-10" => (70000, 3)
+  | "name-plus-1" => (7000, 3) | "name-plus-10" => (70000, 3)
   | "file50" | "stream50" => (910000, 3)
   | "fileBin50" => (910000, 4)
   | "percent50" => (10000000, 8)
