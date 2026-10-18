@@ -324,11 +324,114 @@ theorem scanUntilU_eq (b : ByteArray) (p : UInt8 → Bool) (stop : USize) (hs : 
         exact Nat.mod_eq_of_lt (by have := stop.toNat_lt_two_pow_numBits; omega)
       rw [ih (i + 1) (by omega), hi]
 
+theorem usize_add_toNat (i : USize) (k : Nat) (h : i.toNat + k < USize.size) :
+    (i + USize.ofNat k).toNat = i.toNat + k := by
+  have hs : USize.size = 2 ^ System.Platform.numBits := rfl
+  have hk : (USize.ofNat k).toNat = k := by
+    simp only [USize.toNat_ofNat']; exact Nat.mod_eq_of_lt (by omega)
+  rw [USize.toNat_add, hk]; exact Nat.mod_eq_of_lt (by omega)
+
+/-- The block guard, on words: `i < stop` and `8 ≤ stop - i`. -/
+theorem guard8 (i stop : USize) : i < stop ∧ USize.ofNat 8 ≤ stop - i ↔ i.toNat + 8 ≤ stop.toNat := by
+  have h8 : (USize.ofNat 8).toNat = 8 := by
+    simp only [USize.toNat_ofNat']; exact Nat.mod_eq_of_lt (by cases System.Platform.numBits_eq <;> simp_all)
+  constructor
+  · rintro ⟨h1, h2⟩
+    rw [USize.lt_iff_toNat_lt] at h1
+    rw [USize.le_iff_toNat_le, USize.toNat_sub_of_le _ _ (USize.le_of_lt (USize.lt_iff_toNat_lt.mpr h1)), h8] at h2
+    omega
+  · intro h
+    have h1 : i < stop := by rw [USize.lt_iff_toNat_lt]; omega
+    refine ⟨h1, ?_⟩
+    rw [USize.le_iff_toNat_le, USize.toNat_sub_of_le _ _ (USize.le_of_lt h1), h8]; omega
+
+/-- `scanUntilU`, eight bytes at a time while none of them is a match:
+fewer branches per byte for a predicate of several comparisons. -/
+@[specialize] def scanUntilU8 (b : ByteArray) (p : UInt8 → Bool) (stop : USize) (hs : stop.toNat ≤ b.size)
+    (i : USize) : USize :=
+  if h' : i < stop ∧ USize.ofNat 8 ≤ stop - i then
+    have h : i.toNat + 8 ≤ stop.toNat := (guard8 i stop).mp h'
+    have hb : ∀ k, k < 8 → (i + USize.ofNat k).toNat < b.size := fun k hk => by
+      rw [usize_add_toNat i k (by have := stop.toNat_lt_two_pow_numBits; simp [USize.size]; omega)]; omega
+    -- `|||` of the flags, not `||`: no branch per byte
+    if ((p (b.uget (i + USize.ofNat 0) (hb 0 (by decide)))).toUInt8 ||| (p (b.uget (i + USize.ofNat 1) (hb 1 (by decide)))).toUInt8 |||
+        (p (b.uget (i + USize.ofNat 2) (hb 2 (by decide)))).toUInt8 ||| (p (b.uget (i + USize.ofNat 3) (hb 3 (by decide)))).toUInt8 |||
+        (p (b.uget (i + USize.ofNat 4) (hb 4 (by decide)))).toUInt8 ||| (p (b.uget (i + USize.ofNat 5) (hb 5 (by decide)))).toUInt8 |||
+        (p (b.uget (i + USize.ofNat 6) (hb 6 (by decide)))).toUInt8 ||| (p (b.uget (i + USize.ofNat 7) (hb 7 (by decide)))).toUInt8) != 0 then
+      scanUntilU b p stop hs i
+    else scanUntilU8 b p stop hs (i + USize.ofNat 8)
+  else scanUntilU b p stop hs i
+termination_by stop.toNat - i.toNat
+decreasing_by
+  have _h := (guard8 i stop).mp h'
+  rw [usize_add_toNat i 8 (by have := stop.toNat_lt_two_pow_numBits; simp [USize.size]; omega)]; omega
+
+/-- A byte that does not match is skipped. -/
+theorem scanUntil_skip (b : ByteArray) (p : UInt8 → Bool) (stop i : Nat) (h : i < stop ∧ i < b.size)
+    (hp : p b[i] = false) : scanUntil b p stop i = scanUntil b p stop (i + 1) := by
+  rw [scanUntil.eq_1]; simp only [h, and_self, ↓reduceDIte, hp, Bool.false_eq_true, ↓reduceIte]
+
+theorem scanUntil_skipN (b : ByteArray) (p : UInt8 → Bool) (stop i : Nat) :
+    ∀ m, (∀ k, k < m → ∃ h : i + k < stop ∧ i + k < b.size, p (b[i + k]'h.2) = false) →
+      scanUntil b p stop i = scanUntil b p stop (i + m) := by
+  intro m
+  induction m with
+  | zero => intro _; rfl
+  | succ m ih =>
+    intro hall
+    rw [ih (fun k hk => hall k (by omega))]
+    obtain ⟨h, hp⟩ := hall m (by omega)
+    rw [scanUntil_skip b p stop (i + m) h hp]; rfl
+
+theorem scanUntilU8_eq (b : ByteArray) (p : UInt8 → Bool) (stop : USize) (hs : stop.toNat ≤ b.size) :
+    ∀ (n : Nat) (i : USize), stop.toNat - i.toNat = n →
+      (scanUntilU8 b p stop hs i).toNat = scanUntil b p stop.toNat i.toNat := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+    intro i hn
+    rw [scanUntilU8.eq_1]
+    split
+    · rename_i h'
+      have h := (guard8 i stop).mp h'
+      have hsz : i.toNat + 8 < USize.size := by
+        have := stop.toNat_lt_two_pow_numBits; simp [USize.size]; omega
+      have hadd : ∀ k, k ≤ 8 → (i + USize.ofNat k).toNat = i.toNat + k := fun k hk =>
+        usize_add_toNat i k (by omega)
+      dsimp only
+      split
+      · exact scanUntilU_eq b p stop hs _ i rfl
+      · rename_i hp
+        have tb : ∀ x : Bool, x.toUInt8 = 0 → x = false := by decide
+        simp only [bne_iff_ne, ne_eq, Decidable.not_not, UInt8.or_eq_zero_iff] at hp
+        obtain ⟨⟨⟨⟨⟨⟨⟨h0, h1⟩, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, h7⟩ := hp
+        replace h0 := tb _ h0; replace h1 := tb _ h1; replace h2 := tb _ h2; replace h3 := tb _ h3
+        replace h4 := tb _ h4; replace h5 := tb _ h5; replace h6 := tb _ h6; replace h7 := tb _ h7
+        have g : ∀ k (hk : k < 8), b.uget (i + USize.ofNat k) (by rw [hadd k (by omega)]; omega) = b[i.toNat + k]'(by omega) :=
+          fun k hk => by
+            have e := hadd k (by omega)
+            simp only [ByteArray.uget, ByteArray.getElem_eq_getElem_data]
+            show b.data[(i + USize.ofNat k).toNat]'_ = _
+            simp only [e]
+        rw [ih (stop.toNat - (i + USize.ofNat 8).toNat) (by rw [hadd 8 (by omega)]; omega) _ rfl, hadd 8 (by omega)]
+        refine (scanUntil_skipN b p _ _ 8 (fun k hk => ⟨⟨by omega, by omega⟩, ?_⟩)).symm
+        rw [← g k hk]
+        match k, hk with
+        | 0, _ => exact h0
+        | 1, _ => exact h1
+        | 2, _ => exact h2
+        | 3, _ => exact h3
+        | 4, _ => exact h4
+        | 5, _ => exact h5
+        | 6, _ => exact h6
+        | 7, _ => exact h7
+    · exact scanUntilU_eq b p stop hs _ i rfl
+
 /-- `scanUntil`, on word indices when they fit. -/
 @[inline] def scanUntilFast (b : ByteArray) (p : UInt8 → Bool) (stop i : Nat) : Nat :=
   let e := min stop b.size
   if h : e < USize.size ∧ i ≤ e then
-    (scanUntilU b p e.toUSize (by rw [toNat_toUSize h.1]; omega) i.toUSize).toNat
+    (scanUntilU8 b p e.toUSize (by rw [toNat_toUSize h.1]; omega) i.toUSize).toNat
   else scanUntil b p stop i
 
 @[csimp] theorem scanUntil_eq_fast : @scanUntil = @scanUntilFast := by
@@ -337,7 +440,7 @@ theorem scanUntilU_eq (b : ByteArray) (p : UInt8 → Bool) (stop : USize) (hs : 
   dsimp only
   split
   · rename_i h
-    rw [scanUntilU_eq b p _ _ _ _ rfl, toNat_toUSize h.1, toNat_toUSize (by omega),
+    rw [scanUntilU8_eq b p _ _ _ _ rfl, toNat_toUSize h.1, toNat_toUSize (by omega),
       ← scanUntil_min b p stop _ i rfl]
   · rfl
 
@@ -367,8 +470,8 @@ theorem scanFor_eq_scanUntil (b : ByteArray) (c : UInt8) (stop : Nat) :
 
 /-- Copying `n` bytes of `a` from `i` onto the end of `b` (growing its
 capacity geometrically) appends them. -/
-theorem copySlice_end (a b : ByteArray) (i n : Nat) :
-    a.copySlice i b b.size n false = b ++ a.extract i (i + n) := by
+theorem copySlice_end (a b : ByteArray) (i n : Nat) (exact : Bool) :
+    a.copySlice i b b.size n exact = b ++ a.extract i (i + n) := by
   apply ByteArray.ext
   simp only [ByteArray.copySlice, ByteArray.data_append, ByteArray.data_extract]
   have h1 : b.data.extract 0 b.size = b.data := Array.extract_eq_self_of_le (Nat.le_refl _)

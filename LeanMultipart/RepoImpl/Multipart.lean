@@ -157,7 +157,7 @@ def dataSpan (s : MState) (b : ByteArray) (i stop : Nat) : Nat :=
 
 /-- Append the `n` bytes at `i` to the part data. -/
 def dataBulk (s : MState) (b : ByteArray) (i n : Nat) : MState :=
-  if n = 0 then s else { s with pos := s.pos + n, data := b.copySlice i s.data s.data.size n false }
+  if n = 0 then s else { s with pos := s.pos + n, data := b.copySlice i s.data s.data.size n (s.data.size == 0) }
 
 theorem step_data (cx : Ctx) (s : MState) (c : UInt8) (hs : s.phase = .partData (.idx 0))
     (hc : c ≠ Byte.CR) : step cx s c = { s with pos := s.pos + 1, data := s.data.push c } := by

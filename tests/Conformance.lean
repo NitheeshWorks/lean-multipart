@@ -328,7 +328,15 @@ def ioDigitCases : List Case :=
 `tests/upstream/unquote_golden.py`. -/
 
 def decodeCases : List Case :=
-  [{ upstream := "starlette formparsers.py FormParser.parse (unquote_plus(field.decode(\"latin-1\"))), tests/upstream/unquote_golden.py"
+  [{ upstream := "starlette formparsers.py FormParser.on_field_name (max_part_size on the name)"
+     name := "starlette urlencoded: a 1 MiB + 1 name is refused at the default limits",
+     run := pure (match API.Starlette.parseUrlencodedForm {} (bs (nTimes "x" (1024 * 1024 + 1) ++ "=1")) with
+       | .error (.fieldTooLarge _) => true | _ => false) },
+   { upstream := "starlette formparsers.py FormParser (a name at the limit is accepted)"
+     name := "starlette urlencoded: a 1 MiB name is accepted and decoded",
+     run := pure (match API.Starlette.parseUrlencodedForm {} (bs (nTimes "a+b%41" (1024 * 1024 / 6) ++ "=1")) with
+       | .ok items => items.val == [(nTimes "a bA" (1024 * 1024 / 6), "1")] | _ => false) },
+   { upstream := "starlette formparsers.py FormParser.parse (unquote_plus(field.decode(\"latin-1\"))), tests/upstream/unquote_golden.py"
      name := "unquotePlusLatin1 = CPython unquote_plus on 812 golden inputs",
      run := do
        let text ← IO.FS.readFile "tests/upstream/unquote_golden.txt"

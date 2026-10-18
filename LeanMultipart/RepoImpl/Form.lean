@@ -356,8 +356,10 @@ def urlStep (lim : FormLimits) (s : UrlState) (c : UInt8) : UrlState :=
     else if lim.maxFields < i'.fields.size then { inner := i', err := some (.tooManyFields lim.maxFields) }
     else { inner := i', err := none }
 
-/-! A run of field data (see `Qs.valueSpan`) is taken at once here too,
-cut short before the byte that would cross `max_part_size`. -/
+/-! A run of a name or value (see `Qs.fieldSpan`) is taken at once here
+too, cut short before the byte that would cross `max_part_size`, so a name
+or value over the limit is refused after reading `max_part_size + 1` of its
+bytes, as Starlette refuses it. -/
 
 /-- Where a run may end: before the byte that would cross `max_part_size`. -/
 def urlStop (lim : FormLimits) (s : UrlState) (i stop : Nat) : Nat :=
@@ -365,12 +367,12 @@ def urlStop (lim : FormLimits) (s : UrlState) (i stop : Nat) : Nat :=
 
 def urlSpan (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : Nat) : Nat :=
   if s.err.isSome || lim.maxFields < s.inner.fields.size then 0
-  else Qs.valueSpan s.inner b i (urlStop lim s i stop)
+  else Qs.fieldSpan s.inner b i (urlStop lim s i stop)
 
-def urlBulk (s : UrlState) (b : ByteArray) (i n : Nat) : UrlState := { s with inner := Qs.valueBulk s.inner b i n }
+def urlBulk (s : UrlState) (b : ByteArray) (i n : Nat) : UrlState := { s with inner := Qs.fieldBulk s.inner b i n }
 
-theorem foldl_urlStep_value (lim : FormLimits) : ∀ (l : Bytes) (s : UrlState), s.err = none →
-    s.inner.phase = .fieldData → (∀ x ∈ l, x ≠ Byte.AMP) → ¬ lim.maxFields < s.inner.fields.size →
+theorem foldl_urlStep_run (lim : FormLimits) : ∀ (l : Bytes) (s : UrlState), s.err = none →
+    Qs.InRun s.inner → (∀ x ∈ l, Qs.runEnds s.inner x = false) → ¬ lim.maxFields < s.inner.fields.size →
     s.inner.name.size + s.inner.value.size + l.length ≤ lim.maxPartSize →
     l.foldl (urlStep lim) s = { s with inner := l.foldl (Qs.step {}) s.inner } := by
   intro l
@@ -379,35 +381,44 @@ theorem foldl_urlStep_value (lim : FormLimits) : ∀ (l : Bytes) (s : UrlState),
   | cons c l ih =>
     intro s he hs hl hf hsz
     have hc := hl c (by simp)
-    have hstep := Qs.step_value {} s.inner c hs hc
+    have hstep := Qs.step_run {} s.inner c hs hc
+    have hph := Qs.runAppend_phase s.inner [c]
+    have hfs := Qs.runAppend_fields s.inner [c]
+    have hsz1 := Qs.runAppend_size s.inner [c]
     have h1 : urlStep lim s c = { s with inner := Qs.step {} s.inner c } := by
       obtain ⟨inner, err⟩ := s
       simp only at he; subst he
-      simp only at hs hf hsz hstep
-      simp only [urlStep, hstep, ByteArray.size_push]
-      simp at hsz
-      have h2 : ¬ lim.maxPartSize < inner.name.size + (inner.value.size + 1) := by omega
+      simp only at hs hf hsz hstep hph hfs hsz1
+      simp only [urlStep, hstep]
+      simp at hsz hsz1
+      have h2 : ¬ lim.maxPartSize < (Qs.runAppend inner [c]).name.size + (Qs.runAppend inner [c]).value.size := by omega
+      rw [hfs]
       simp only [h2, hf, ↓reduceIte]
     rw [List.foldl_cons, List.foldl_cons, h1]
-    refine ih _ he (by simp only [hstep]; exact hs) (fun x hx => hl x (by simp [hx])) (by simp only [hstep]; exact hf) ?_
-    simp only [hstep, ByteArray.size_push]; simp at hsz; omega
+    refine ih _ he (by simp only [hstep]; unfold Qs.InRun at *; rw [hph]; exact hs)
+      (fun x hx => by simp only [hstep]; unfold Qs.runEnds at *; rw [hph]; exact hl x (by simp [hx]))
+      (by simp only [hstep]; rw [hfs]; exact hf) ?_
+    simp only [hstep]
+    simp only [List.length_singleton] at hsz1
+    simp only [List.length_cons] at hsz
+    omega
 
 theorem urlSpan_le (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : Nat) :
     urlSpan lim s b i stop ≤ stop - i := by
   unfold urlSpan; split
   · exact Nat.zero_le _
-  · have := Qs.valueSpan_le s.inner b i (urlStop lim s i stop)
+  · have := Qs.fieldSpan_le s.inner b i (urlStop lim s i stop)
     have : urlStop lim s i stop ≤ stop := by unfold urlStop; omega
     omega
 
 theorem urlBulk_eq (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : Nat) :
     urlBulk s b i (urlSpan lim s b i stop) = ((b.data.toList.drop i).take (urlSpan lim s b i stop)).foldl (urlStep lim) s := by
-  have hle : urlSpan lim s b i stop ≤ Qs.valueSpan s.inner b i (urlStop lim s i stop) := by
+  have hle : urlSpan lim s b i stop ≤ Qs.fieldSpan s.inner b i (urlStop lim s i stop) := by
     unfold urlSpan; split
     · exact Nat.zero_le _
     · exact Nat.le_refl _
   by_cases h0 : urlSpan lim s b i stop = 0
-  · rw [h0]; simp [urlBulk, Qs.valueBulk]
+  · rw [h0]; simp [urlBulk, Qs.fieldBulk]
   · have hc : ¬ (s.err.isSome || decide (lim.maxFields < s.inner.fields.size)) = true := by
       intro h; apply h0; unfold urlSpan; simp only [h, ↓reduceIte]
     have he : s.err = none := by
@@ -416,14 +427,14 @@ theorem urlBulk_eq (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : N
       · simp [h] at hc
     have hf : ¬ lim.maxFields < s.inner.fields.size := by
       intro h; apply hc; simp [h]
-    have hph := Qs.valueSpan_phase s.inner b i (urlStop lim s i stop) (by omega)
+    have hrun := Qs.fieldSpan_run s.inner b i (urlStop lim s i stop) (by omega)
     unfold urlBulk
-    rw [Qs.valueBulk_le {} s.inner b i _ _ hle]
-    refine (foldl_urlStep_value lim _ s he hph
-      (fun x hx => Qs.valueSpan_ne s.inner b i _ x (List.take_subset_take_left _ hle hx)) hf ?_).symm
+    rw [Qs.fieldBulk_le {} s.inner b i _ _ hle]
+    refine (foldl_urlStep_run lim _ s he hrun
+      (fun x hx => Qs.fieldSpan_ne s.inner b i _ x (List.take_subset_take_left _ hle hx)) hf ?_).symm
     have hlen : ((b.data.toList.drop i).take (urlSpan lim s b i stop)).length ≤ urlSpan lim s b i stop :=
       List.length_take_le _ _
-    have hd := Qs.valueSpan_le s.inner b i (urlStop lim s i stop)
+    have hd := Qs.fieldSpan_le s.inner b i (urlStop lim s i stop)
     unfold urlStop at hd hle
     omega
 

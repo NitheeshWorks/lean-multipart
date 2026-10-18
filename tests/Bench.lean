@@ -85,6 +85,10 @@ def body : String → ByteArray
   | "cl10m" => build [.fill 49 (10 * mb)]
   | "cl10mx" => build [.fill 49 (10 * mb), .bytes (u "x")]
   | "options" => build [.bytes (u "text/plain"), .rep (u "; a=b") 2000000]
+  | "name-1" => build [.fill 120 mb, .bytes (u "=1")]
+  | "name-2" => build [.fill 120 (2 * mb), .bytes (u "=1")]
+  | "name-4" => build [.fill 120 (4 * mb), .bytes (u "=1")]
+  | "name-over" => build [.fill 120 (mb + 1), .bytes (u "=1")]
   | c => match qsCases.find? (·.1 == c) with
     | some (_, k, m) => qsValue k m
     | none => ByteArray.empty
@@ -116,49 +120,61 @@ def run (c : String) (b : ByteArray) : String :=
     match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
     | .error e => s!"{repr e}"
     | .ok items => s!"decoded {(items.val.map (·.2.length)).foldl (· + ·) 0} chars"
+  | "name-1" | "name-2" | "name-4" =>
+    match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
+    | .error e => s!"{repr e}"
+    | .ok items => s!"decoded {(items.val.map (·.1.length)).foldl (· + ·) 0} name chars"
+  | "name-over" => match API.Starlette.parseUrlencodedForm {} b with
+    | .error e => s!"{repr e}"
+    | .ok _ => "accepted"
   | "cl1m" | "cl10m" | "cl10mx" =>
     match parseForm [("Content-Type", u "application/x-www-form-urlencoded"), ("Content-Length", b)] (u "a=b") with
     | .error e => (toString e).take 60 |>.toString
     | .ok _ => "accepted"
   | c => s!"unknown case {c}"
 
-/-- Per case: the time bound in ms, and the peak-memory bound as a multiple
+/-- Per case: the time bound in µs, and the peak-memory bound as a multiple
 of the body (plus a 64 MB runtime baseline). The whole-part parses are held
 to 2× Starlette's 455 ms. A part with `CR` bytes in it is appended run by
 run, and the buffer grows by doubling, so while it grows the peak can reach
 three times the part (Starlette spools files to disk instead; files here are
 held in memory, a documented deviation). -/
 def bounds : String → Nat × Nat
-  | "url50" | "mp50" | "qsMany" => (500, 3)
-  | "mpMany" => (1000, 3)
-  | "options" => (100, 3)
+  | "url50" | "mp50" | "qsMany" => (500000, 3)
+  | "mpMany" => (1000000, 3)
+  | "options" => (100000, 3)
   -- a huge Content-Length is refused in linear time (Python's 4300-digit limit)
-  | "cl1m" => (250, 3)
+  | "cl1m" => (250000, 3)
   -- Starlette's urlencoded parse and decode, 2× python-multipart + unquote_plus
   -- (tests/upstream/urlencoded_speed.py: plain 1/22/106 ms, escaped 124/1130/5847,
   -- mixed 63/575/2963 for 1/10/50 MiB); 1 MiB plain gets a 10 ms floor.
-  | "qs-plain-1" => (10, 3) | "qs-plain-10" => (44, 3) | "qs-plain-50" => (212, 3)
-  | "qs-escaped-1" => (248, 3) | "qs-escaped-10" => (2260, 3) | "qs-escaped-50" => (11694, 3)
-  | "qs-mixed-1" => (126, 3) | "qs-mixed-10" => (1150, 3) | "qs-mixed-50" => (5926, 3)
-  | "cl10m" | "cl10mx" => (1000, 3)
-  | "file50" | "stream50" => (910, 3)
-  | "fileBin50" => (910, 4)
-  | "percent50" => (10000, 8)
+  | "qs-plain-1" => (10000, 3) | "qs-plain-10" => (44000, 3) | "qs-plain-50" => (212000, 3)
+  | "qs-escaped-1" => (248000, 3) | "qs-escaped-10" => (2260000, 3) | "qs-escaped-50" => (11694000, 3)
+  | "qs-mixed-1" => (126000, 3) | "qs-mixed-10" => (1150000, 3) | "qs-mixed-50" => (5926000, 3)
+  | "cl10m" | "cl10mx" => (1000000, 3)
+  -- plain field names of 1, 2, 4 MiB, and a 1 MiB + 1 name refused at the default
+  -- limits: 2× python-multipart + unquote_plus (1.5, 2.3, 7.0 ms) and 2× Starlette
+  -- 1.8.0's refusal (1.3 ms), from tests/upstream/urlencoded_speed.py
+  | "name-1" => (3000, 3) | "name-2" => (4600, 3) | "name-4" => (14000, 3) | "name-over" => (2600, 3)
+  | "file50" | "stream50" => (910000, 3)
+  | "fileBin50" => (910000, 4)
+  | "percent50" => (10000000, 8)
   | _ => (0, 0)
 
 def main (args : List String) : IO UInt32 := do
   let some c := args.head? | IO.println "usage: bench <case>"; return 2
   let b := body c
   IO.println s!"{c} built {b.size} bytes"
-  let t0 ← IO.monoMsNow
+  let t0 ← IO.monoNanosNow
   let outcome := run c b
   IO.println s!"{c} outcome={outcome}"
-  let t1 ← IO.monoMsNow
+  let t1 ← IO.monoNanosNow
   let peak ← peakKB
-  IO.println s!"RESULT {c} size={b.size} ms={t1 - t0} peakKB={peak}"
-  let (maxMs, factor) := bounds c
+  let us := (t1 - t0) / 1000
+  IO.println s!"RESULT {c} size={b.size} ms={us / 1000} us={us} peakKB={peak}"
+  let (maxUs, factor) := bounds c
   let maxKB := b.size * factor / 1024 + 65536
   let mut ok := true
-  if t1 - t0 > maxMs then IO.println s!"  FAIL time {t1 - t0} ms > {maxMs} ms"; ok := false
+  if us > maxUs then IO.println s!"  FAIL time {us} µs > {maxUs} µs"; ok := false
   if peak > maxKB then IO.println s!"  FAIL memory {peak} KB > {maxKB} KB"; ok := false
   return if ok then 0 else 1

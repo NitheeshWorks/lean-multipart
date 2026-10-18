@@ -180,6 +180,8 @@ a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 | 1,000,000 tiny parts (58 MB) | `tooManyFields` | 9 ms | 68 MB |
 | 1,000,000 `a=b&` (4 MB) | `tooManyFields` | < 1 ms | 13 MB |
 | a 10 MB `Content-Length` value | refused (Python's 4300-digit limit) | 230 ms | 22 MB |
+| a 1 / 2 / 4 MiB field name, parsed and decoded | plain | 2.5 / 3.8 / 7.3 ms (python-multipart + `unquote_plus`: 1.5 / 2.3 / 7.0) | 13 / 18 / 24 MB |
+| a 1 MiB + 1 field name at the default limits | `fieldTooLarge` | 0.3 ms (Starlette: 1.3 ms) | 11 MB |
 | `a=` + 10 MiB value, parsed and decoded (`parseUrlencodedForm`) | plain / escaped / mixed | 24 / 486 / 414 ms (python-multipart + `unquote_plus`: 22 / 1130 / 575) | 44 MB |
 | 50 MB file part, whole body | parsed | 150 ms | 115 MB |
 | 50 MB random binary file part, whole body | parsed | 260 ms | 220 MB |

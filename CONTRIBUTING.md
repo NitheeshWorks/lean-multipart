@@ -86,7 +86,12 @@ is `unquotePlusLatin1Fast`, and `Proofs/Unquote.lean` proves the two equal
 and marks it `@[csimp]`, so compiled code runs the fast form while every
 statement is about the specification. Scans use the same mechanism:
 `scanUntil` and `scanFor` count with `Nat` in the proofs and run on `USize`
-indices (`scanUntil_eq_fast`, `scanFor_eq_fast`). Agreement with CPython is
+indices, eight bytes per step with the flags or-ed together while none
+matches (`scanUntilU8`, `scanUntil_eq_fast`, `scanFor_eq_fast`). The
+querystring machines take a name's run (to `=` or `&`) and a value's run (to
+`&`) at once (`Qs.fieldSpan`, `Qs.fieldBulk_le`), and Starlette's cuts the
+run before the byte that crosses `max_part_size`, so an over-long name or
+value is refused after reading `max_part_size + 1` of its bytes. Agreement with CPython is
 tested on 812 golden inputs (`tests/upstream/unquote_golden.py`).
 
 ### The round trips are codec instances

@@ -186,15 +186,33 @@ theorem unquotePlusLatin1Bytes_eq (raw : ByteArray) :
     plainBulk_eq raw raw.size _ 0 _ rfl, bytesFold_full, finish_toBytes, foldl_toBytes]
   rfl
 
-/-- `unquotePlusLatin1`, run fast: the bytes are valid UTF-8 because they
-are the specification's string's bytes. -/
+open Unquote in
+/-- A field with no `%`, `+` or byte `≥ 0x80` decodes to itself. -/
+theorem unquotePlusLatin1_plain (raw : ByteArray) (h : scanUntil raw special raw.size 0 = raw.size) :
+    (unquotePlusLatin1 raw).toByteArray = raw := by
+  have hne := scanUntil_ne raw special raw.size _ 0 rfl
+  rw [h, Nat.sub_zero, List.drop_zero, List.take_of_length_le (by simp [Array.length_toList])] at hne
+  unfold unquotePlusLatin1
+  rw [finish_toBytes, foldl_toBytes, foldl_plain _ _ rfl rfl hne]
+  apply ByteArray.ext_toList
+  simp [toBytes, finish]
+
+/-- `unquotePlusLatin1`, run fast: a plain field is its own bytes, any other
+is decoded with runs copied at once; either way the bytes are valid UTF-8
+because they are the specification's string's bytes. -/
 def unquotePlusLatin1Fast (raw : ByteArray) : String :=
-  String.ofByteArray (unquotePlusLatin1Bytes raw)
-    (by rw [unquotePlusLatin1Bytes_eq]; exact (unquotePlusLatin1 raw).isValidUTF8)
+  if h : scanUntil raw Unquote.special raw.size 0 = raw.size then
+    String.ofByteArray raw (by rw [← unquotePlusLatin1_plain raw h]; exact (unquotePlusLatin1 raw).isValidUTF8)
+  else
+    String.ofByteArray (unquotePlusLatin1Bytes raw)
+      (by rw [unquotePlusLatin1Bytes_eq]; exact (unquotePlusLatin1 raw).isValidUTF8)
 
 @[csimp] theorem unquotePlusLatin1_eq_fast : @unquotePlusLatin1 = @unquotePlusLatin1Fast := by
   funext raw
   apply String.toByteArray_inj.mp
-  exact (unquotePlusLatin1Bytes_eq raw).symm
+  unfold unquotePlusLatin1Fast
+  split
+  · rename_i h; exact (unquotePlusLatin1_plain raw h)
+  · exact (unquotePlusLatin1Bytes_eq raw).symm
 
 end LeanMultipart
