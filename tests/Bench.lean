@@ -59,6 +59,16 @@ def peakKB : IO Nat := do
       return (String.ofList (line.toList.filter Char.isDigit)).toNat!
   return 0
 
+/-- `a=` and a value of `mib` MiB: plain (`x`), escaped (`%41`), or mixed
+(`ab+c%20` repeated), as `tests/upstream/urlencoded_speed.py` builds them. -/
+def qsValue (kind : String) (mib : Nat) : ByteArray :=
+  let unit := match kind with | "escaped" => u "%41" | "mixed" => u "ab+c%20" | _ => u "x"
+  let n := mib * mb
+  (build [.bytes (u "a="), .rep unit (n / unit.size + 1)]).extract 0 (n + 2)
+
+def qsCases : List (String × String × Nat) :=
+  ["plain", "escaped", "mixed"].flatMap fun k => [1, 10, 50].map fun m => (s!"qs-{k}-{m}", k, m)
+
 def body : String → ByteArray
   | "url50" => build [.bytes (u "a="), .fill 120 (50 * mb)]
   | "qsMany" => build [.rep (u "a=b&") 1000000]
@@ -75,7 +85,9 @@ def body : String → ByteArray
   | "cl10m" => build [.fill 49 (10 * mb)]
   | "cl10mx" => build [.fill 49 (10 * mb), .bytes (u "x")]
   | "options" => build [.bytes (u "text/plain"), .rep (u "; a=b") 2000000]
-  | _ => ByteArray.empty
+  | c => match qsCases.find? (·.1 == c) with
+    | some (_, k, m) => qsValue k m
+    | none => ByteArray.empty
 
 def run (c : String) (b : ByteArray) : String :=
   match c with
@@ -99,6 +111,11 @@ def run (c : String) (b : ByteArray) : String :=
     return s!"streamed {total} data bytes"
   | "percent50" => s!"{(percentDecode (percentEncode b)).size == b.size}"
   | "options" => s!"{(parseOptionsHeader b).2.entries.length} params"
+  | "qs-plain-1" | "qs-plain-10" | "qs-plain-50" | "qs-escaped-1" | "qs-escaped-10" | "qs-escaped-50"
+  | "qs-mixed-1" | "qs-mixed-10" | "qs-mixed-50" =>
+    match API.Starlette.parseUrlencodedForm { maxPartSize := 64 * mb } b with
+    | .error e => s!"{repr e}"
+    | .ok items => s!"decoded {(items.val.map (·.2.length)).foldl (· + ·) 0} chars"
   | "cl1m" | "cl10m" | "cl10mx" =>
     match parseForm [("Content-Type", u "application/x-www-form-urlencoded"), ("Content-Length", b)] (u "a=b") with
     | .error e => (toString e).take 60 |>.toString
@@ -117,6 +134,12 @@ def bounds : String → Nat × Nat
   | "options" => (100, 3)
   -- a huge Content-Length is refused in linear time (Python's 4300-digit limit)
   | "cl1m" => (250, 3)
+  -- Starlette's urlencoded parse and decode, 2× python-multipart + unquote_plus
+  -- (tests/upstream/urlencoded_speed.py: plain 1/22/106 ms, escaped 124/1130/5847,
+  -- mixed 63/575/2963 for 1/10/50 MiB); 1 MiB plain gets a 10 ms floor.
+  | "qs-plain-1" => (10, 3) | "qs-plain-10" => (44, 3) | "qs-plain-50" => (212, 3)
+  | "qs-escaped-1" => (248, 3) | "qs-escaped-10" => (2260, 3) | "qs-escaped-50" => (11694, 3)
+  | "qs-mixed-1" => (126, 3) | "qs-mixed-10" => (1150, 3) | "qs-mixed-50" => (5926, 3)
   | "cl10m" | "cl10mx" => (1000, 3)
   | "file50" | "stream50" => (910, 3)
   | "fileBin50" => (910, 4)

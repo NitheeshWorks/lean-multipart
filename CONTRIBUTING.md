@@ -73,6 +73,22 @@ Starlette machine cuts the run before the byte that crosses
 (`foldChunk_eq`). This took the whole 50 MB file-part parse from about 3 s
 to about 150 ms.
 
+### Starlette's field decoding, and `@[csimp]`
+
+Starlette decodes each urlencoded name and value with
+`unquote_plus(raw.decode("latin-1"))`. `unquotePlusLatin1`
+(`RepoImpl/Unquote.lean`) is that algorithm as a byte machine pushing
+characters onto a `String`: `+` is a space, each run of `%XY` bytes is UTF-8
+with CPython's replacement rules, any other byte is its Latin-1 character.
+The machine is generic in its output (`Sink`); run into a `ByteArray` of
+UTF-8 with runs of plain ASCII copied at once (`plainSpan`, `plainBulk`), it
+is `unquotePlusLatin1Fast`, and `Proofs/Unquote.lean` proves the two equal
+and marks it `@[csimp]`, so compiled code runs the fast form while every
+statement is about the specification. Scans use the same mechanism:
+`scanUntil` and `scanFor` count with `Nat` in the proofs and run on `USize`
+indices (`scanUntil_eq_fast`, `scanFor_eq_fast`). Agreement with CPython is
+tested on 812 golden inputs (`tests/upstream/unquote_golden.py`).
+
 ### The round trips are codec instances
 
 `Theory/Codec.lean` defines `Reads M P w Q` (from every state in `P`,
@@ -200,6 +216,8 @@ mis-split of a quoted value ending in `\\` (UP-005).
 * `examples/`: the ported upstream examples (`MANIFEST.toml`, checked by
   `stack-tools/check-examples.py`), with `support/` for `hashlib` and `wsgiref`;
   `LeanMultipart/RepoImpl/IOParsers.lean`: the `IO` objects they use.
+* `tests/upstream/urlencoded_speed.py`: python-multipart and Starlette's
+  `unquote_plus` timings that the `qs-*` bench bounds are 2× of.
 * `tests/Bench.lean` with `scripts/bench.sh`: native time and peak-memory
   checks on 50 MB bodies, run in CI.
 * `tests/pbt/`: a separate Lake package, the one place an external

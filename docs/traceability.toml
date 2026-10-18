@@ -409,3 +409,13 @@ status = "tested"
 realises = ["LeanMultipart.parseFormStream", "LeanMultipart.MultipartParser.create", "LeanMultipart.MultipartParser.Object.write", "LeanMultipart.pyInt", "LeanMultipart.contentLength?"]
 test = ["tests/Conformance.lean::example docs/index.md output matches upstream", "tests/Conformance.lean::io: chunk_size 0", "tests/Conformance.lean::io: bad header after a field (no callbacks before the error, deviation 6)", "tests/Conformance.lean::io: create b'B' then a write that raises", "tests/upstream/io_errors.py", "tests/Conformance.lean::io: Content-Length 4301 digits", "tests/Bench.lean::bounds"]
 note = "Thin IO loops over the pure parsers. Error paths (bad header, Content-Length as int() reads it with its 4300-digit limit, refused in linear time (bench cl1m, cl10m, cl10mx), chunk_size 0, no boundary, create None / b'') are compared with python-multipart 0.0.32; callbacks before an error and b'' at create are deviations 6, 10 and 4."
+
+[[requirement]]
+id = "starlette.decode"
+upstream = "starlette formparsers.py FormParser.parse: unquote_plus(field_name.decode(\"latin-1\")), unquote_plus(field_value.decode(\"latin-1\"))"
+title = "Starlette's decoding of urlencoded fields, compiled to a bulk-copying form proved equal"
+status = "implemented"
+realises = ["LeanMultipart.unquotePlusLatin1", "LeanMultipart.unquotePlusLatin1Fast", "LeanMultipart.API.Starlette.decodeField", "LeanMultipart.API.Starlette.parseUrlencodedForm"]
+theorem = ["LeanMultipart.unquotePlusLatin1_eq_fast", "LeanMultipart.unquotePlusLatin1Bytes_eq", "LeanMultipart.scanUntil_eq_fast", "LeanMultipart.scanFor_eq_fast"]
+test = ["tests/Conformance.lean::unquotePlusLatin1 = CPython unquote_plus on 812 golden inputs", "tests/upstream/unquote_golden.py", "tests/upstream/urlencoded_speed.py", "tests/Bench.lean::bounds"]
+note = "Within 2x of python-multipart + unquote_plus on 1, 10 and 50 MiB values (plain, escaped, mixed), measured natively in CI."

@@ -320,7 +320,32 @@ def ioDigitCases : List Case :=
   ].map fun (name, cl, up) =>
     ioCase s!"Content-Length {name}" up (formLine ((fields up).headD "") (urlCt ++ [("Content-Length", bs cl)]) clBody)
 
-def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ ioDigitCases ++ [
+/-! ## Starlette's field decoding
+
+`tests/upstream/unquote_golden.txt` holds CPython's
+`unquote_plus(raw.decode("latin-1"))` for 812 seeded inputs (escapes,
+`+`, invalid and truncated UTF-8, Latin-1 bytes), written by
+`tests/upstream/unquote_golden.py`. -/
+
+def decodeCases : List Case :=
+  [{ upstream := "starlette formparsers.py FormParser.parse (unquote_plus(field.decode(\"latin-1\"))), tests/upstream/unquote_golden.py"
+     name := "unquotePlusLatin1 = CPython unquote_plus on 812 golden inputs",
+     run := do
+       let text ← IO.FS.readFile "tests/upstream/unquote_golden.txt"
+       let mut ok := true
+       let mut n := 0
+       for line in text.splitOn "\n" do
+         match line.splitOn " " with
+         | [raw, want] =>
+           n := n + 1
+           let got := (API.Starlette.decodeField (unhex raw, .empty)).1.toUTF8
+           unless eqB got (unhex want) do
+             IO.println s!"      {raw}: got {got.toList}, want {(unhex want).toList}"
+             ok := false
+         | _ => pure ()
+       return ok && n == 812 }]
+
+def cases : List Case := httpCases ++ singleByteCases ++ exampleCases ++ ioCases ++ ioDigitCases ++ decodeCases ++ [
   -- Querystring parser
   { upstream := "tests/test_multipart.py::TestQuerystringParser::test_simple_querystring"
     name := "querystring simple", run := qsIs {} ["foo=bar"] [("foo", "bar")] },

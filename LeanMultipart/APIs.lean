@@ -25,6 +25,9 @@ import LeanMultipart.APIs.Form
 * `parseFormStream headers stream onField onFile`, `MultipartParser.create
   boundary callbacks` (`.write`, `.finalize`): upstream's `parse_form` and
   `MultipartParser` as `IO` objects that raise, as the docs examples use them.
+* `unquotePlusLatin1 raw`: Starlette's `unquote_plus(raw.decode("latin-1"))`;
+  `API.Starlette.decodeField`, and `API.Starlette.parseUrlencodedForm lim
+  body` for the decoded pairs.
 * `Starlette.UrlencodedParser`, `Starlette.MultipartFormParser`: Starlette's
   form parsers, streaming, with `max_fields` / `max_files` / `max_part_size`
   enforced as bytes arrive (`.write`, `.error?`, `.finalize`).

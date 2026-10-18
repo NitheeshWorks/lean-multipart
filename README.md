@@ -125,6 +125,7 @@ theorems are below.
 | `Field`, `File` (`field_name`, `value`, `file_name`, `content_type`, `size`) | `Field`, `File` (`fieldName`, `value`, `fileName`, `contentType`, `size`) |
 | `Base64Decoder`, `QuotedPrintableDecoder` | the same names, `.write`, `.finalize` |
 | `QuerystringParseError`, `MultipartParseError` (with `offset`) | the same names; `offset` is chunk-relative, `error.offset` absolute |
+| Starlette's `unquote_plus(raw.decode("latin-1"))` on a field | `unquotePlusLatin1 raw`, `API.Starlette.decodeField`; parse and decode: `API.Starlette.parseUrlencodedForm lim body` |
 | Starlette's `FormParser` / `MultiPartParser` with `max_fields`, `max_files`, `max_part_size` | streaming: `Starlette.UrlencodedParser`, `Starlette.MultipartFormParser` (`.write chunk`, `.error?`, `.finalize`); whole body: `API.Starlette.parseUrlencoded`, `API.Starlette.parseMultipartForm` |
 
 Functions with a refinement in their type, in `LeanMultipart.API`
@@ -179,6 +180,7 @@ a 50 MB body, and 455 ms to parse a whole 50 MB file part.
 | 1,000,000 tiny parts (58 MB) | `tooManyFields` | 9 ms | 68 MB |
 | 1,000,000 `a=b&` (4 MB) | `tooManyFields` | < 1 ms | 13 MB |
 | a 10 MB `Content-Length` value | refused (Python's 4300-digit limit) | 230 ms | 22 MB |
+| `a=` + 10 MiB value, parsed and decoded (`parseUrlencodedForm`) | plain / escaped / mixed | 24 / 486 / 414 ms (python-multipart + `unquote_plus`: 22 / 1130 / 575) | 44 MB |
 | 50 MB file part, whole body | parsed | 150 ms | 115 MB |
 | 50 MB random binary file part, whole body | parsed | 260 ms | 220 MB |
 | 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 150 ms | 68 MB |

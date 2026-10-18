@@ -54,9 +54,92 @@ def step (cfg : QsConfig) (s : QsState) (c : UInt8) : QsState :=
     if c == Byte.AMP then { finishField s with phase := .beforeField true }
     else { s with value := s.value.push c }
 
-/-- The machine: `step`, the byte counter, and the `maxSize` limit. The
-general chunking theorems of `Theory/Machine.lean` apply to it. -/
-def machine (cfg : QsConfig) : Machine QsState := { step := step cfg, pos := QsState.pos, limit := cfg.maxSize }
+/-! ## Runs of field data
+
+In a field's value every byte but `&` is appended. `valueSpan` finds such a
+run and `valueBulk` appends it with one copy; `valueBulk_le` proves that is
+what `step` does byte by byte, so `feedA` may take the shortcut. -/
+
+/-- The length of the run of value bytes at `i`, before `stop` (0 if none). -/
+def valueSpan (s : QsState) (b : ByteArray) (i stop : Nat) : Nat :=
+  match s.phase with
+  | .fieldData => scanFor b Byte.AMP stop i - i
+  | _ => 0
+
+/-- Append the `n` bytes at `i` to the value. -/
+def valueBulk (s : QsState) (b : ByteArray) (i n : Nat) : QsState :=
+  if n = 0 then s else { s with pos := s.pos + n, value := b.copySlice i s.value s.value.size n false }
+
+theorem step_value (cfg : QsConfig) (s : QsState) (c : UInt8) (hs : s.phase = .fieldData)
+    (hc : c ≠ Byte.AMP) : step cfg s c = { s with pos := s.pos + 1, value := s.value.push c } := by
+  obtain ⟨ph, pos, ns, n, v, fs⟩ := s
+  simp only at hs; subst hs
+  simp [step, hc]
+
+theorem foldl_value (cfg : QsConfig) : ∀ (l : Bytes) (s : QsState), s.phase = .fieldData →
+    (∀ x ∈ l, x ≠ Byte.AMP) →
+    l.foldl (step cfg) s = { s with pos := s.pos + l.length, value := s.value ++ ⟨l.toArray⟩ } := by
+  intro l
+  induction l with
+  | nil => intro s _ _; simp
+  | cons c l ih =>
+    intro s hs hl
+    rw [List.foldl_cons, step_value cfg s c hs (hl c (by simp)),
+      ih { s with pos := s.pos + 1, value := s.value.push c } hs (fun x hx => hl x (by simp [hx]))]
+    simp only [List.length_cons]
+    congr 1
+    · omega
+    · apply ByteArray.ext_toList; simp [ByteArray.data_append]
+
+theorem valueSpan_le (s : QsState) (b : ByteArray) (i stop : Nat) : valueSpan s b i stop ≤ stop - i := by
+  unfold valueSpan; split
+  · rcases scanFor_le b Byte.AMP stop _ i rfl with h | h <;> omega
+  · exact Nat.zero_le _
+
+theorem valueSpan_phase (s : QsState) (b : ByteArray) (i stop : Nat) (h : valueSpan s b i stop ≠ 0) :
+    s.phase = .fieldData := by
+  unfold valueSpan at h; split at h
+  · assumption
+  · exact absurd rfl h
+
+theorem valueSpan_ne (s : QsState) (b : ByteArray) (i stop : Nat) :
+    ∀ x ∈ (b.data.toList.drop i).take (valueSpan s b i stop), x ≠ Byte.AMP := by
+  unfold valueSpan; split
+  · exact scanFor_ne b Byte.AMP stop _ i rfl
+  · simp
+
+theorem valueSpan_size (s : QsState) (b : ByteArray) (i stop : Nat) :
+    i + valueSpan s b i stop ≤ b.size ∨ valueSpan s b i stop = 0 := by
+  unfold valueSpan; split
+  · rcases scanFor_le b Byte.AMP stop _ i rfl with h | h <;> omega
+  · exact Or.inr rfl
+
+/-- Any prefix of a run, appended at once, is what `step` does. -/
+theorem valueBulk_le (cfg : QsConfig) (s : QsState) (b : ByteArray) (i stop k : Nat) (hk : k ≤ valueSpan s b i stop) :
+    valueBulk s b i k = ((b.data.toList.drop i).take k).foldl (step cfg) s := by
+  unfold valueBulk
+  split
+  · rename_i h; rw [h]; rfl
+  · rename_i h
+    have hph := valueSpan_phase s b i stop (by omega)
+    have hne : ∀ x ∈ (b.data.toList.drop i).take k, x ≠ Byte.AMP := fun x hx =>
+      valueSpan_ne s b i stop x (List.take_subset_take_left _ hk hx)
+    have hlen : ((b.data.toList.drop i).take k).length = k := by
+      rcases valueSpan_size s b i stop with hs | hs
+      · simp [Array.length_toList]; omega
+      · omega
+    rw [foldl_value cfg _ s hph hne, hlen, copySlice_end]
+    congr 1
+    apply ByteArray.ext_toList
+    simp only [ByteArray.data_append, Array.toList_append, extract_toList]
+
+/-- The machine: `step`, the byte counter, and the `maxSize` limit, with the
+shortcut for runs of field data. The general chunking theorems of
+`Theory/Machine.lean` apply to it. -/
+def machine (cfg : QsConfig) : Machine QsState :=
+  { step := step cfg, pos := QsState.pos, limit := cfg.maxSize,
+    span := valueSpan, bulk := valueBulk, span_le := valueSpan_le,
+    bulk_eq := fun s b i stop => valueBulk_le cfg s b i stop _ (Nat.le_refl _) }
 
 /-- Feed bytes (no truncation). -/
 def feed (cfg : QsConfig) (s : QsState) (l : Bytes) : QsState := l.foldl (step cfg) s

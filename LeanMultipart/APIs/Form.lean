@@ -1,6 +1,7 @@
 import LeanMultipart.Specifications.Multipart
 import LeanMultipart.Proofs.Form
 import LeanMultipart.APIs.Multipart
+import LeanMultipart.Proofs.Unquote
 
 /-!
 # API: forms (upstream's `FormParser`) and Starlette's limited parsers
@@ -10,6 +11,8 @@ import LeanMultipart.APIs.Multipart
 | `API.parseForm cfg kind body` | `{r // ∀ chunkings, FormParser gives r}` |
 | `API.Starlette.parseUrlencoded lim body` | `Except LimitError {fs // Spec.UrlencodedWithinLimits lim fs}` |
 | `API.Starlette.parseMultipartForm lim contentType body` | `Except LimitError {ps // Spec.MultipartWithinLimits lim ps}` |
+| `API.Starlette.parseUrlencodedForm lim body` | `Except LimitError {items // ∃ fs, Spec.UrlencodedWithinLimits lim fs ∧ items = fs.map decodeField}` |
+| `API.Starlette.decodeField f` | Starlette's `unquote_plus(raw.decode("latin-1"))` of a name and value |
 
 `FormParser.ofKind / write / finalize` and `createFormParser` are the streaming
 interface; `FormParser.write_chunks` proves any chunking equals one write.
@@ -31,13 +34,25 @@ def parseForm (cfg : FormParserConfig) (kind : FormKind) (body : ByteArray)
 namespace Starlette
 
 /-- Starlette's `FormParser`: the raw fields of an urlencoded body (names
-and values still percent-encoded; decode with `API.unquotePlus` and the
-request charset), with `max_fields` and `max_part_size` enforced. -/
+and values still percent-encoded; `decodeField` decodes them as Starlette
+does, and `parseUrlencodedForm` does both), with `max_fields` and `max_part_size` enforced. -/
 def parseUrlencoded (lim : FormLimits) (body : ByteArray) :
     Except LimitError {fs : List QsField // Spec.UrlencodedWithinLimits lim fs} :=
   match h : LeanMultipart.Starlette.parseUrlencodedRaw lim body with
   | .error e => .error e
   | .ok fs => .ok ⟨fs, LeanMultipart.Starlette.parseUrlencodedRaw_ok lim body fs h⟩
+
+/-- Starlette's decoding of one raw urlencoded field:
+`unquote_plus(name.decode("latin-1"))` and the same for the value
+(`unquotePlusLatin1`, compiled to its fast form by `@[csimp]`). -/
+def decodeField (f : QsField) : String × String := (unquotePlusLatin1 f.1, unquotePlusLatin1 f.2)
+
+/-- Starlette's `FormParser.parse` on an urlencoded body: the decoded
+`(name, value)` pairs, in order, of raw fields within the limits. -/
+def parseUrlencodedForm (lim : FormLimits) (body : ByteArray) :
+    Except LimitError {items : List (String × String) //
+      ∃ fs, Spec.UrlencodedWithinLimits lim fs ∧ items = fs.map decodeField} :=
+  (parseUrlencoded lim body).map fun fs => ⟨fs.val.map decodeField, fs.val, fs.property, rfl⟩
 
 /-- Starlette's `MultiPartParser`: the parts of a `multipart/form-data`
 body given the request's `Content-Type`, with `max_files`, `max_fields` and

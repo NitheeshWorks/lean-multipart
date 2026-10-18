@@ -356,7 +356,80 @@ def urlStep (lim : FormLimits) (s : UrlState) (c : UInt8) : UrlState :=
     else if lim.maxFields < i'.fields.size then { inner := i', err := some (.tooManyFields lim.maxFields) }
     else { inner := i', err := none }
 
-def urlMachine (lim : FormLimits) : Machine UrlState := { step := urlStep lim, pos := (·.inner.pos), limit := none }
+/-! A run of field data (see `Qs.valueSpan`) is taken at once here too,
+cut short before the byte that would cross `max_part_size`. -/
+
+/-- Where a run may end: before the byte that would cross `max_part_size`. -/
+def urlStop (lim : FormLimits) (s : UrlState) (i stop : Nat) : Nat :=
+  min stop (i + (lim.maxPartSize - (s.inner.name.size + s.inner.value.size)))
+
+def urlSpan (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : Nat) : Nat :=
+  if s.err.isSome || lim.maxFields < s.inner.fields.size then 0
+  else Qs.valueSpan s.inner b i (urlStop lim s i stop)
+
+def urlBulk (s : UrlState) (b : ByteArray) (i n : Nat) : UrlState := { s with inner := Qs.valueBulk s.inner b i n }
+
+theorem foldl_urlStep_value (lim : FormLimits) : ∀ (l : Bytes) (s : UrlState), s.err = none →
+    s.inner.phase = .fieldData → (∀ x ∈ l, x ≠ Byte.AMP) → ¬ lim.maxFields < s.inner.fields.size →
+    s.inner.name.size + s.inner.value.size + l.length ≤ lim.maxPartSize →
+    l.foldl (urlStep lim) s = { s with inner := l.foldl (Qs.step {}) s.inner } := by
+  intro l
+  induction l with
+  | nil => intro s _ _ _ _ _; rfl
+  | cons c l ih =>
+    intro s he hs hl hf hsz
+    have hc := hl c (by simp)
+    have hstep := Qs.step_value {} s.inner c hs hc
+    have h1 : urlStep lim s c = { s with inner := Qs.step {} s.inner c } := by
+      obtain ⟨inner, err⟩ := s
+      simp only at he; subst he
+      simp only at hs hf hsz hstep
+      simp only [urlStep, hstep, ByteArray.size_push]
+      simp at hsz
+      have h2 : ¬ lim.maxPartSize < inner.name.size + (inner.value.size + 1) := by omega
+      simp only [h2, hf, ↓reduceIte]
+    rw [List.foldl_cons, List.foldl_cons, h1]
+    refine ih _ he (by simp only [hstep]; exact hs) (fun x hx => hl x (by simp [hx])) (by simp only [hstep]; exact hf) ?_
+    simp only [hstep, ByteArray.size_push]; simp at hsz; omega
+
+theorem urlSpan_le (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : Nat) :
+    urlSpan lim s b i stop ≤ stop - i := by
+  unfold urlSpan; split
+  · exact Nat.zero_le _
+  · have := Qs.valueSpan_le s.inner b i (urlStop lim s i stop)
+    have : urlStop lim s i stop ≤ stop := by unfold urlStop; omega
+    omega
+
+theorem urlBulk_eq (lim : FormLimits) (s : UrlState) (b : ByteArray) (i stop : Nat) :
+    urlBulk s b i (urlSpan lim s b i stop) = ((b.data.toList.drop i).take (urlSpan lim s b i stop)).foldl (urlStep lim) s := by
+  have hle : urlSpan lim s b i stop ≤ Qs.valueSpan s.inner b i (urlStop lim s i stop) := by
+    unfold urlSpan; split
+    · exact Nat.zero_le _
+    · exact Nat.le_refl _
+  by_cases h0 : urlSpan lim s b i stop = 0
+  · rw [h0]; simp [urlBulk, Qs.valueBulk]
+  · have hc : ¬ (s.err.isSome || decide (lim.maxFields < s.inner.fields.size)) = true := by
+      intro h; apply h0; unfold urlSpan; simp only [h, ↓reduceIte]
+    have he : s.err = none := by
+      cases h : s.err
+      · rfl
+      · simp [h] at hc
+    have hf : ¬ lim.maxFields < s.inner.fields.size := by
+      intro h; apply hc; simp [h]
+    have hph := Qs.valueSpan_phase s.inner b i (urlStop lim s i stop) (by omega)
+    unfold urlBulk
+    rw [Qs.valueBulk_le {} s.inner b i _ _ hle]
+    refine (foldl_urlStep_value lim _ s he hph
+      (fun x hx => Qs.valueSpan_ne s.inner b i _ x (List.take_subset_take_left _ hle hx)) hf ?_).symm
+    have hlen : ((b.data.toList.drop i).take (urlSpan lim s b i stop)).length ≤ urlSpan lim s b i stop :=
+      List.length_take_le _ _
+    have hd := Qs.valueSpan_le s.inner b i (urlStop lim s i stop)
+    unfold urlStop at hd hle
+    omega
+
+def urlMachine (lim : FormLimits) : Machine UrlState :=
+  { step := urlStep lim, pos := (·.inner.pos), limit := none,
+    span := urlSpan lim, bulk := urlBulk, span_le := urlSpan_le lim, bulk_eq := urlBulk_eq lim }
 
 /-- After a limit error nothing more is read. -/
 def urlHalted (s : UrlState) : Bool := s.err.isSome
