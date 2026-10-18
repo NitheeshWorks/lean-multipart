@@ -185,6 +185,28 @@ def createFormParser (contentType : Option ByteArray) (cfg : FormParserConfig :=
   let kind ← FormKind.select (latin1Decode ⟨ctype.toArray⟩) boundary
   pure (FormParser.new cfg kind fileName)
 
+/-! ## Printing form parts -/
+
+/-- `form-data; name="…"` and, for a file, `; filename="…"`. Names are
+written inside double quotes without escaping, so the round trip through
+`parse_options_header` needs names without `"`, `\`, `;`, `CR` or `LF`
+(see UP-005 for what upstream does with a trailing backslash). -/
+def dispositionValue (name : ByteArray) (filename : Option ByteArray) : ByteArray :=
+  let q : ByteArray := ⟨#[Byte.DQUOTE]⟩
+  let base := ⟨(ascii "form-data; name=").toArray⟩ ++ q ++ name ++ q
+  match filename with
+  | none => base
+  | some f => base ++ ⟨(ascii "; filename=").toArray⟩ ++ q ++ f ++ q
+
+/-- A form part with `Content-Disposition` and, if given, `Content-Type`. -/
+def formPart (name : ByteArray) (filename : Option ByteArray) (contentType : Option ByteArray)
+    (body : ByteArray) : RawPart :=
+  { headers := (⟨(ascii "Content-Disposition").toArray⟩, dispositionValue name filename) ::
+      (match contentType with
+       | none => []
+       | some ct => [(⟨(ascii "Content-Type").toArray⟩, ct)])
+    body }
+
 /-! ## Starlette's form parsers -/
 
 namespace Starlette
