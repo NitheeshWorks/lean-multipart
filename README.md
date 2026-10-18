@@ -110,7 +110,7 @@ example sums the bytes.) `parser.writeWith callbacks chunk` fires a
 | `Field`, `File` (`field_name`, `value`, `file_name`, `content_type`, `size`) | `Field`, `File` (`fieldName`, `value`, `fileName`, `contentType`, `size`) |
 | `Base64Decoder`, `QuotedPrintableDecoder` | the same names, `.write`, `.finalize` |
 | `QuerystringParseError`, `MultipartParseError` (with `offset`) | the same names; `offset` is chunk-relative, `error.offset` absolute |
-| Starlette's `FormParser` / `MultiPartParser` limits | `API.Starlette.parseUrlencoded`, `API.Starlette.parseMultipartForm` (`max_fields`, `max_files`, `max_part_size`) |
+| Starlette's `FormParser` / `MultiPartParser` with `max_fields`, `max_files`, `max_part_size` | streaming: `Starlette.UrlencodedParser`, `Starlette.MultipartFormParser` (`.write chunk`, `.error?`, `.finalize`); whole body: `API.Starlette.parseUrlencoded`, `API.Starlette.parseMultipartForm` |
 
 Functions with a refinement in their type, in `LeanMultipart.API`
 (`LeanMultipart/APIs/`), are what lean-starlette imports:
@@ -140,7 +140,7 @@ checks that it reaches only Lean's three axioms.
 | Streaming equals whole-buffer, every split | `QuerystringParser.parseChunks cfg chunks = Qs.parse cfg (concatChunks chunks)`; `MultipartParser.parseChunks cx chunks = (Mp.parse cx (concatChunks chunks)).toExcept`; `(chunks.foldl FormParser.write p) = p.write (concatChunks chunks)` |
 | Totality | the parsers process `min(len, max_size)` bytes and report errors at offsets inside them (`Qs.parse_total`, `Mp.parse_total`) |
 | A parsed boundary is valid | `API.parseBoundary` returns `{b // ValidBoundary b}` |
-| Starlette's limits | an accepted form has at most `max_fields` fields, `max_files` files, every field within `max_part_size` |
+| Starlette's limits, enforced as bytes arrive | an accepted form has at most `max_fields` fields, `max_files` files, every field within `max_part_size` (`parseUrlencodedRaw_ok`, `parseMultipartRaw_ok`); and while no limit error has been raised the parser's state is within the limits (`urlencoded_bounded`, `multipart_bounded`): it stops at the byte that crosses one, so no state beyond the limit is kept; any chunking gives the result of one write (`finalize_chunks`) |
 
 The round trips are instances of one codec theory (`Theory/Codec.lean`): a
 judgement `Reads M P w Q` for byte machines and one lemma per printer
@@ -150,11 +150,30 @@ combinator (`append`, `flatMap`, `sepBy`). The chunking theorems rest on
 What is tested rather than proved, and every deviation from upstream, is in
 [CONTRIBUTING.md](CONTRIBUTING.md#verification) and `docs/traceability.toml`.
 
+## Performance
+
+`scripts/bench.sh` (run in CI) builds each body natively and checks time and
+peak memory; the peak includes the body itself. Starlette, streaming the same
+bodies, takes 73 to 109 ms and about 121 MB.
+
+| Input | Outcome | Parse time | Peak memory |
+|---|---|---|---|
+| `a=` + 50 MB value | `fieldTooLarge` | 59 ms | 68 MB |
+| one 50 MB multipart field | `partTooLarge` | 65 ms | 68 MB |
+| 1,000,000 tiny parts (58 MB) | `tooManyFields` | 8 ms | 68 MB |
+| 1,000,000 `a=b&` (4 MB) | `tooManyFields` | < 1 ms | 13 MB |
+| 50 MB file part, whole body | parsed | 3.2 s | 149 MB |
+| 50 MB file part, `MultipartParser` in 64 KB chunks | streamed | 2.6 s | 64 MB |
+
+Parsers read the packed bytes directly and keep their buffers in
+`ByteArray`; the limit parsers stop reading at the first error.
+
 ## Building and testing
 
 ```
 lake build              # library, proofs, tests, quickstart
-lake exe props          # 14 seeded properties (`lake exe props 42`)
+lake exe props          # 15 seeded properties (`lake exe props 42`)
+scripts/bench.sh        # native time and memory checks on 50 MB bodies
 lake exe conformance    # cases re-expressed from python-multipart's and Starlette's tests
 lake exe quickstart     # the examples above
 scripts/check.sh --pbt  # the whole CI gate

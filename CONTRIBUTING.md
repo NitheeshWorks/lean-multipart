@@ -43,6 +43,22 @@ in `Proofs/Stream.lean`) say that collecting the callbacks as upstream's
 The proofs are an invariant between the whole-buffer state, the streaming
 state, and what the collector has assembled, checked byte by byte.
 
+### Starlette's limits are machines too
+
+Starlette raises `max_fields`, `max_files` and `max_part_size` from inside
+the parser callbacks. `Starlette.urlStep` and `Starlette.mpStep` wrap the
+querystring and multipart steps with the same checks (a field's name and
+value on every byte; a part's name and file/field count when its headers
+end; a field part's data on every byte) and move to an error that is a fixed
+point. `Machine.feedAUntil` stops reading at a fixed point, and
+`feedAUntil_eq` proves that equal to the full fold, so the chunking theorems
+apply (`UrlencodedParser.finalize_chunks`, `MultipartFormParser.finalize_chunks`).
+`Starlette.UrlInv` and `Starlette.MpInv` say that, while no error has been
+raised, the retained state is within the limits; `urlencoded_bounded` and
+`multipart_bounded` prove they hold after any input. The step facts they
+rest on (a step adds at most the field or part it was reading) are in
+`Proofs/StepFacts.lean`.
+
 ### The round trips are codec instances
 
 `Theory/Codec.lean` defines `Reads M P w Q` (from every state in `P`,
@@ -93,7 +109,7 @@ Each has a property in `tests/Props.lean` or cases in
 | Base64 and quoted-printable decoders | a correctness statement needs an encoder and a model of `binascii`'s non-strict rules; conformance cases mirror every upstream decoder test, properties check them against reference encoders |
 | `FormParser` field/file interpretation (CTE, missing name, content type) | it is a pure function of the proved multipart result; conformance cases mirror upstream's |
 | Error kinds and offsets | the fixtures in `tests/Fixtures.lean` carry upstream's expected offsets |
-| Linear time on large inputs | `bigChecks` in `tests/Props.lean` runs a 2 MB urlencoded value, an 8 MB percent round trip and an 8 MB multipart part |
+| Time and memory on large inputs | `scripts/bench.sh` (in CI) asserts parse time and peak memory (at most three times the body plus the runtime baseline) on 50 MB bodies, including the limit cases; `bigChecks` in `tests/Props.lean` covers 2 to 8 MB inputs |
 
 ### Deviations from upstream
 
@@ -135,6 +151,11 @@ Each is a `status = "deviation"` row in `docs/traceability.toml`.
     `FormParser.write`.
 11. **Starlette names** are returned as bytes; decoding with the request
     charset is lean-starlette's job.
+12. **`parse_options_header` input is bounded** at `Options.maxLength`
+    (16 KiB, as servers bound header blocks): a longer value has no
+    parameters. Upstream parses any length; the list-based parser here costs
+    tens of bytes per input byte. Multipart part headers are bounded anyway
+    by `max_header_size`.
 
 Matching upstream on purpose, though upstream is arguably wrong:
 `filename*` and other `*` parameters are ignored (RFC 7578 §4.2); an empty
@@ -152,6 +173,8 @@ mis-split of a quoted value ending in `\\` (UP-005).
   each names its upstream test. `tests/Fixtures.lean` holds upstream's HTTP
   fixtures (`tests/test_data/http/`) as data.
 * `examples/Quickstart.lean`: the README quickstart.
+* `tests/Bench.lean` with `scripts/bench.sh`: native time and peak-memory
+  checks on 50 MB bodies, run in CI.
 * `tests/pbt/`: a separate Lake package, the one place an external
   dependency (`plausible`) is taken.
 

@@ -22,6 +22,9 @@ import LeanMultipart.APIs.Form
   `Field`, `File`, `FormItem`, `FormError`.
 * `parseOptionsHeader value : ByteArray × Params`, `Params.get key`.
 * `Base64Decoder`, `QuotedPrintableDecoder`.
+* `Starlette.UrlencodedParser`, `Starlette.MultipartFormParser`: Starlette's
+  form parsers, streaming, with `max_fields` / `max_files` / `max_part_size`
+  enforced as bytes arrive (`.write`, `.error?`, `.finalize`).
 * `Boundary` (with `Boundary.ofBytes?`), `RawPart`, `Mp.parse`, `Mp.print`,
   `Qs.parse`, `percentEncode`, `percentDecode`, `quotePlus`, `unquotePlus`,
   `urlencodeB`, `urldecodeB`, `formPart`, `dispositionValue`.

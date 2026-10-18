@@ -365,10 +365,37 @@ realises = ["LeanMultipart.Starlette.parseMultipartRaw"]
 test = ["tests/Conformance.lean::starlette missing boundary", "tests/Conformance.lean::starlette boundary too long"]
 
 [[requirement]]
+id = "starlette.streaming"
+upstream = "starlette formparsers.py FormParser.parse / MultiPartParser.parse (stream fed chunk by chunk)"
+title = "Starlette's form parsers as streaming parsers; any chunking gives one write's result"
+status = "implemented"
+realises = ["LeanMultipart.Starlette.UrlencodedParser.write", "LeanMultipart.Starlette.MultipartFormParser.write"]
+theorem = ["LeanMultipart.Starlette.UrlencodedParser.finalize_chunks", "LeanMultipart.Starlette.MultipartFormParser.finalize_chunks"]
+test = ["tests/Props.lean::smoke Starlette streaming parsers"]
+
+[[requirement]]
+id = "starlette.bounded"
+upstream = "starlette tests/test_formparsers.py::test_urlencoded_limits_stop_parsing_within_a_single_chunk"
+title = "Limits enforced as bytes arrive; parsing stops at the first excess"
+status = "implemented"
+realises = ["LeanMultipart.Starlette.urlStep", "LeanMultipart.Starlette.mpStep", "LeanMultipart.Machine.feedAUntil"]
+theorem = ["LeanMultipart.Starlette.urlencoded_bounded", "LeanMultipart.Starlette.multipart_bounded", "LeanMultipart.Machine.feedAUntil_eq"]
+test = ["tests/Conformance.lean::starlette urlencoded stops at the first excess", "tests/Conformance.lean::starlette multipart: the first limit crossed is reported", "scripts/bench.sh"]
+
+[[requirement]]
+id = "options.max-length"
+upstream = "python_multipart/multipart.py parse_options_header"
+title = "parse_options_header input bounded at 16 KiB"
+status = "deviation"
+realises = ["LeanMultipart.Options.parseB", "LeanMultipart.Options.maxLength"]
+test = ["scripts/bench.sh"]
+note = "Upstream parses any length; values over 16 KiB give no parameters, bounding memory and time."
+
+[[requirement]]
 id = "perf.linear"
 upstream = "review finding (quadratic streaming, stack depth)"
 title = "Linear time and constant stack on large inputs"
 status = "tested"
 realises = ["LeanMultipart.QuerystringParser.write", "LeanMultipart.percentDecode"]
-test = ["tests/Props.lean::bigChecks"]
-note = "Timing is checked by running large inputs, not proved."
+test = ["tests/Props.lean::bigChecks", "scripts/bench.sh"]
+note = "Time and peak memory are checked natively on 50 MB bodies in CI, not proved."
